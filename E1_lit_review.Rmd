@@ -1,0 +1,1353 @@
+---
+title: "E1 Lit review"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(data.table)
+library(corrplot)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(RColorBrewer)
+library(gplots)
+library(colorspace)
+library("ggpubr")
+library("gridExtra")
+library("GGally")
+library("ggridges")
+library(wesanderson)
+library("sjmisc")
+library("patchwork")
+library(scales)
+library("extrafont")
+library("gghighlight")
+`%ni%` = Negate(`%in%`)
+loadfonts()
+library(stringr)
+library("PRROC")
+library("tidymodels")
+library(eulerr)
+```
+
+```{r}
+setwd("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/")
+```
+
+## reading files 
+
+```{r}
+# lit <- fread("~/Downloads/KCNE1_litReview_forR_take2.csv", header=T, stringsAsFactors = F) %>% rename("mutation"="variant")
+master_lit <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/SupplementalTables/KCNE1_litReview_forR_2.2.23.csv", header=T, stringsAsFactors = F) %>% dplyr::rename("mutation"="variant")
+# 268 rows 
+scores <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Fitness/2023-01-03-funcscores-day0.txt", header=T, stringsAsFactors = F)
+```
+
+## process the lit file
+```{r}
+# for the cases analyses, need the "Patient data" == "yes" 
+
+lit <- subset(master_lit, PatientData =="yes") # this is Andrew's version and does not require processing 
+# na_if(.,"*") %>% 
+#   mutate_at(c("Total hets","Hets with LQT","Hets with SIDS/SADS","Hets unaffected","Hets other","Total hom carriers","Hom carriers with JLNS","Compound het carriers","Compound het carriers with JLNS","Compound het carriers with LQT but no hearing loss"), as.numeric)
+# 63 unique mutations 
+
+ test <- lit %>% group_by(mutation) %>%
+  summarize_at(vars(`Total hets`:`Hets other`,`Total hom carriers`:`Compound het carriers with LQT but no hearing loss`), sum, na.rm = TRUE) %>% ungroup()
+# create a list of variants 
+ # 63 unique mutations
+ # sum of "cases" and sum of "controls"
+ # mutation"                        "Total hets"                      "Hets with LQT"                   "Hets with SIDS/SADS"            
+ # "Hets unaffected"                 "Hets other"                      "Total hom carriers"              "Hom carriers with JLNS"         
+ # "Compound het carriers"           "Compound het carriers with JLNS" "Compound het carriers with LQT but no hearing loss"
+ 
+ 	
+# 36310723 found a discrepancy - needed 4 unaffected carriers added. verified and corrected. 2/4/23. 
+# 14499862: 2 carriers who cannot be determned to have LQTS from an ECG 
+# 16155735: 2 compound hets with LQTS and not JLNS, so adding them as well 
+ test$lit="yes"
+ test$people = test$`Total hets`+test$`Total hom carriers`+test$`Compound het carriers`
+ test$cases = test$`Hets with LQT` + test$`Hets with SIDS/SADS` + test$`Compound het carriers with JLNS` +test$`Hom carriers with JLNS` + test$`Compound het carriers with LQT but no hearing loss`
+test$controls = test$`Hets unaffected` + test$`Compound het carriers` - test$`Compound het carriers with JLNS` - test$`Compound het carriers with LQT but no hearing loss`
+
+# to test the math 
+ggplot(test, aes(people,(cases+controls)))+geom_point()
+
+```
+
+## merge the files 
+
+```{r}
+lit_scores <- left_join(scores,test, by="mutation")
+#  "c.-3del"          "I57T"       "L3fs+4X" "Leu16Leufs*46"     "N75fs+34X"     "p.Asn5fs*" "p.P11AfsTer24"         "Q117X"       "S4fs+0X"    "T58P+L59P" 
+# variants for which we have no scores 
+# 23382499 the paper miscoded c.170T>C as I57T, but it should be F57S (I is not 55,56,57 or 58 at WT position) --> exclude? 
+
+
+```
+
+### aggregare carrier counts 
+
+```{r}
+
+gnomad <- fread("~/Downloads/gnomAD_v2.1.1_ENSG00000180509_2022_10_11_08_33_16.csv", header=T, stringsAsFactors = F) %>% dplyr::select(.,"Position", "rsIDs", "Reference", "Alternate", "Source", "Protein Consequence","Allele Count", "Transcript Consequence","VEP Annotation",
+"ClinVar Clinical Significance","ClinVar Variation ID","Allele Count","Allele Number","Allele Frequency","Homozygote Count","Hemizygote Count") %>% dplyr::filter(.,`Protein Consequence` != "") %>% dplyr::mutate(`Protein` = str_sub(`Protein Consequence`, 3, -1)) 
+
+gnomad <- gnomad %>% dplyr::mutate(mutation =  str_replace_all(gnomad$Protein, c(
+              "Ala"="A", "Arg"="R", "Asn"="N", "Asp"="D",
+              "Cys"="C", "Glu"="E", "Gln"="Q", "Gly"="G",
+              "His"="H", "Ile"="I", "Leu"="L", "Lys"="K",
+              "Met"="M", "Phe"="F", "Pro"="P", "Ser"="S",
+              "Thr"="T", "Trp"="W", "Tyr"="Y", "Val"="V", "Ter"="X"
+              ) ) ) %>% separate(mutation,into= c("orig","pos","new"),sep=c(1,-1),convert = T)
+
+head(gnomad)
+
+gnomad$mutation = ifelse(gnomad$pos ==38, ifelse(gnomad$new=="G",paste(gnomad$new,gnomad$pos,gnomad$orig,sep=""),paste("G",gnomad$pos,gnomad$new,sep="")),
+                         paste(gnomad$orig,gnomad$pos,gnomad$new,sep=""))
+
+benign = c("benign","benign/likely benign")
+conf = c("conflicting interpretations of pathogenicity", "conflicting interpretations of pathogenicity, other, risk factor")
+vus = c("uncertain significance","not provided")
+path= c("pathogenic/likely pathogenic","pathogenic")
+lb = c("likely benign")
+lp = c("likely pathogenic")
+
+# there are "duplicates" in gnomad, i.e, if there are two SNPs that cause the same protein change, they are counted as two rows 
+# so the rows need to be combined 
+# to be find dups 
+x1 <- data.frame(table(gnomad$mutation))
+dups_gnomad <- unlist(x1[x1$Freq >1,"Var1"])
+
+# this step is to remove duplicates 
+gnomad <- gnomad %>% group_by(mutation,Protein,orig,pos,new,`Protein Consequence`) %>% dplyr::summarize(
+                                            across(`Position`:`Source`, ~trimws(paste0(.x, collapse="|"))),
+                                            `Allele Count` = sum(`Allele Count`, na.rm=T),
+                                            across(`Transcript Consequence`:`ClinVar Variation ID`, ~trimws(paste0(.x, collapse=" "))),
+                                            across(`Allele Number`:`Hemizygote Count`, sum, na.rm=T)) %>% ungroup()
+
+
+gnomad <- gnomad %>% group_by(`ClinVar Clinical Significance`) %>% 
+    dplyr::mutate(clinvar = case_when(
+      tolower(`ClinVar Clinical Significance`) %in% benign ~ "B",
+      tolower(`ClinVar Clinical Significance`) %in% lb ~"LB",
+      tolower(`ClinVar Clinical Significance`) %in% path ~ "P",
+      tolower(`ClinVar Clinical Significance`) %in% lp ~ "LP",
+      tolower(`ClinVar Clinical Significance`) %in% vus ~ "VUS",
+      tolower(`ClinVar Clinical Significance`) %in% conf ~ "Conflicting",
+           
+    ),
+    class = case_when(tolower(`ClinVar Clinical Significance`) %in% c(benign,vus,path,conf,lb,lp)~ "Classified" )) %>% ungroup()
+
+scores1 <- lit_scores %>% left_join(.,gnomad[,c("mutation","Allele Frequency","clinvar","Allele Count")])
+  
+#   left_join(scores,num1) %>% left_join(.,num2) %>% left_join(.,num4) %>% left_join(.,gnomad[,c("mutation","Allele Frequency","clinvar","Allele Count")])
+
+# affected carrier (LQTS +SIDS/SADS) / total carrier (gnomad carriers + unaffected carrier from Lit + LQTS +SIDS/SADS)
+scores1$affected = ifelse(!is.na(scores1$cases),scores1$cases,0)
+ # scores1$`Hets with SIDS/SADS` + scores1$`Hets with LQT`
+scores1$unaffected = rowSums(scores1[,c("controls","Allele Count")], na.rm=T)
+scores1$penet = ifelse((scores1$unaffected + scores1$affected)>0 ,scores1$affected / (scores1$unaffected + scores1$affected),NA)
+
+# I don't think we will need this anymore, since we are combining LQTS and JLNS
+# scores1$penet_LQTS = ifelse((is.na(scores1$`Hets with LQT`) & scores1$`Allele Count` >0),0,scores1$`Hets with LQT` / (scores1$`Hets with LQT` + scores1$unaffected))
+
+ggscatter(scores1, x="trans_av",y="penet",add="reg.line")+stat_cor(method="spearman", cor.coef.name = "rho")
+
+synon <- scores1[scores1$mutationType=="synon"]
+co1 = mean(synon$trans_av, na.rm = T) - 3*sd(synon$trans_av, na.rm = T)
+co2 = mean(synon$trans_av, na.rm = T) + 3*sd(synon$trans_av, na.rm = T)
+
+co3 = mean(synon$trans_av, na.rm = T) - 1.96*sd(synon$trans_av, na.rm = T)
+co4 = mean(synon$trans_av, na.rm = T) + 1.96*sd(synon$trans_av, na.rm = T)
+
+p <- ggscatter(scores1, x="trans_av",y="penet",add="reg.line")+
+  stat_cor(method="spearman", cor.coef.name = "rho", label.x.npc = "right", hjust=1, label.sep = "\n", family="Myriad Pro")+
+  geom_vline(xintercept = c(co1,co2), col="red", lty=2)+
+  xlab("Functional Score")+
+  ylab(expression("Literature penetrance"))+
+  theme(text=element_text(family = "Myriad Pro"))
+
+p
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"FuncVpenetrance.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+## clinvar classified variants (cut off from gnomad) 
+## not using this because of the bias against P/LP vairants in gnomad 
+```{r}
+data1 <- gnomad %>%
+  group_by(clinvar) %>%
+  dplyr::summarise(count = n()) %>%
+  dplyr::mutate(fraction = count/sum(count)) 
+# of note, 1 LP variant, and 5 P
+
+
+grid.table(data1)
+```
+
+## this panel is with gnomad variants only 
+```{r}
+# which(scores1$clinvar =="LP")
+synon <- scores1[scores1$mutationType=="synon"]
+co1 = mean(synon$trans_av, na.rm = T) - 3*sd(synon$trans_av, na.rm = T)
+co2 = mean(synon$trans_av, na.rm = T) + 3*sd(synon$trans_av, na.rm = T)
+
+scores1$clinvar <- factor(scores1$clinvar,c("Conflicting","VUS","NA","B", "LB", "LP", "P"))
+
+line_data = data.frame(xintercept = c(co1, co2, 
+                                      tapply(scores1$trans_av, scores1$mutationType =="synon", mean, na.rm=T)[2] + 1.96* tapply(scores1$trans_av, scores1$mutationType =="synon", sd, na.rm=T)[2],
+                                      tapply(scores1$trans_av, scores1$mutationType =="synon", mean, na.rm=T)[2] - 1.96* tapply(scores1$trans_av, scores1$mutationType =="synon", sd, na.rm=T)[2]),
+                       linecolor=c("3SD","3SD","1.96SD","1.96SD")
+                       )
+
+putative_LoF <- scores1[scores1$cases >0  & 
+                          (scores1$`Allele Frequency` <2.5e-5 | is.na(scores1$`Allele Frequency`)) & 
+                          scores1$mutationType =="missense"]
+# 7 variants meet the case, penet and gnomad criteria, and out of those, 2 are pathogenic, those are both nonsense
+# all the penetrance is greater than 0.625 so technically don't even need the penetrance cutoff 
+# putative LoF only adds 5 (4 VUS and one not classified to the set up )
+# we get to a total of 11 P/LP 
+
+putative_nl <- scores1[scores1$`Allele Count` > 10 &
+                         scores1$penet <0.1 &
+                         scores1$mutationType =="missense"]
+# of note, 29 observations have Allele Count >10, and of those, 16 are 0 but are coded as NA
+# 8 of those 16 are synonymous, 7/8 are coded as B/LB and 1 as conflicting (S37S)
+# i am okay droppingn 
+# of the mutations with Allele Count >10, the Allele Frequency summary is 
+# summary(putative_nl$`Allele Frequency`)
+#      Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+# 0.0000424 0.0000566 0.0001168 0.0227885 0.0001830 0.6445355 
+
+# from gnomad 
+ben <- unlist(scores1[scores1$clinvar %in% c("B","LB") & scores1$mutationType=="missense","mutation"])
+pat <- unlist(scores1[scores1$clinvar %in% c("P","LP")& scores1$mutationType=="missense","mutation"])
+
+scores1$put = ifelse((scores1$mutation %in% putative_nl$mutation | scores1$mutation %in% ben),"WT-like",
+                     ifelse((scores1$mutation %in% putative_LoF$mutation | scores1$mutation %in% pat),"LoF-like","NA"))
+
+missense <- scores1[scores1$mutationType=="missense",]
+p <- ggplot(missense[!is.na(missense$clinvar)],aes(clinvar,trans_av, fill=clinvar))+
+  geom_boxplot(width=0.5)+
+  geom_point()+
+  theme_classic2()+
+  xlab("ClinVar Classification")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(missense$clinvar))-1),
+           y = 1.3,
+           label = paste("n=",table(missense$clinvar, exclude = "NA", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")+
+  scale_color_manual(values=c("red","black"))
+
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"FuncvClinVarfromGNOMAD_msonly.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+
+# all clinvar from gnomad variants (not limited to MS)
+p <- ggplot(scores1[!is.na(scores1$clinvar)],aes(clinvar,trans_av, fill=clinvar))+
+  geom_boxplot(width=0.5)+
+  geom_point()+
+  theme_classic2()+
+  xlab("ClinVar Classification")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(missense$clinvar))-1),
+           y = 1.3,
+           label = paste("n=",table(scores1$clinvar, exclude = "NA", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")+
+  scale_color_manual(values=c("red","black"))
+
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"FuncvClinVarGNOMADONLY_all.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+
+# this is a histogram (doesnt look pretty)
+ggplot(scores1[!is.na(scores1$clinvar)],aes(trans_av,fill=clinvar))+geom_histogram(bins = 100)+
+  theme_classic() +
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  labs(y=NULL, x="Functional Score", title=NULL)+
+  theme(legend.position="top",text=element_text(family="Myriad Pro"))+
+  geom_vline(aes(xintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_color_manual(values=c("black","red"))# +
+  
+# this is a violin plot (als doesnt look pretty)
+ggplot(scores1[!is.na(scores1$clinvar)],aes(x=0,y=trans_av,fill=clinvar))+geom_violin(scale="count")+
+  theme_classic() + coord_flip()
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")#+
+  labs(y=NULL, x="Functional Score", title=NULL)+
+  theme(legend.position="top",text=element_text(family="Myriad Pro"))+
+  geom_vline(aes(xintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_color_manual(values=c("black","red"))
+
+```
+
+
+```{r}
+q <- ggplot(missense[missense$put !="NA"],aes(put,trans_av))+
+  geom_boxplot(width=0.5,fill=c("darkred","lightgrey"))+
+  geom_point()+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("red","black"))+
+  annotate("text",
+           x = 1:(length(table(missense$put))-1),
+           y = 1.5,
+           label = paste("n=",table(missense$put, exclude = "NA", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"FuncvLitReview_GNOMAD+LIT_msonly.pdf",sep="")
+ggsave(q, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+# these are only MS variants, so don't need an all variants version 
+# for all variants 
+
+q <- ggplot(scores1[scores1$put !="NA"],aes(put,trans_av))+
+  geom_boxplot(width=0.5,fill=c("darkred","lightgrey"))+
+  geom_point()+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("red","black"))+
+  annotate("text",
+           x = 1:(length(table(scores1$put))-1),
+           y = 1.5,
+           label = paste("n=",table(scores1$put, exclude = "NA", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"FuncvLitReview_GNOMAD+LIT_msonly.pdf",sep="")
+ggsave(q, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+# at least 1 with LQTS and penet >= 10% (0.1) and gnomad < 2.5e-5
+```{r}
+
+
+# clinvar annotations coming from gnomad + lit review 
+p <- ggplot(scores1,aes(put,trans_av, fill=put))+
+  geom_boxplot()+
+  geom_point()+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("dodgerblue4","skyblue2","lightsalmon1","darkred","grey62","grey90"), name="", na.value = "white")+
+  scale_color_manual(values=c("red","black"))+
+  annotate("text",
+           x = 1:(length(table(scores1$put))),
+           y = 1.5,
+           label = paste("n=",table(scores1$put),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"putative_lit_vFunc_GNOMADonly.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 5,device = cairo_pdf, units = "in")
+
+```
+
+```{r}
+clin <- fread("~/Downloads/KCNE1_clinvar.txt", header=T, stringsAsFactors = F) %>% dplyr::filter(.,`Protein change` !="") %>% separate(`Protein change`,into= c("orig","pos","new"),sep=c(1,-1),convert = T, remove = F) %>% 
+    dplyr::select("orig","pos","new","Condition(s)","Clinical significance (Last reviewed)","Protein change") 
+
+clin$new = ifelse(clin$new =="*","X",clin$new)
+clin$mutation = paste(clin$orig, clin$pos, clin$new, sep="")
+
+clin$mutation = ifelse(clin$pos ==38, ifelse(clin$new=="G",paste(clin$new,clin$pos,clin$orig,sep=""),paste("G",clin$pos,clin$new,sep="")),
+                         paste(clin$orig,clin$pos,clin$new,sep=""))
+
+clin <- clin %>% group_by(mutation,orig,pos,new,`Protein change`) %>% dplyr::summarize(
+                                            across(`Condition(s)`:`Clinical significance (Last reviewed)`, ~trimws(paste0(.x, collapse="|")))) %>% ungroup()
+                                            
+
+clin$Class = ifelse(grepl("likely pathogenic",tolower(clin$`Clinical significance (Last reviewed)`)),"LP",
+                            ifelse(grepl("benign/",tolower(clin$`Clinical significance (Last reviewed)`)),"B",
+                                   ifelse(grepl("conf",tolower(clin$`Clinical significance (Last reviewed)`)),"Conf",
+                                          ifelse(grepl("uncertain",tolower(clin$`Clinical significance (Last reviewed)`)),"VUS",
+                                  ifelse(grepl("pathogenic",tolower(clin$`Clinical significance (Last reviewed)`)),"P", 
+                                        ifelse(grepl("likely b",tolower(clin$`Clinical significance (Last reviewed)`)),"LB","NotProvided"))))))
+
+clin$cat = ifelse(clin$new=="X","nonsense",ifelse(clin$new == clin$orig, "synonymous", ifelse(grepl("fs",clin$mutation),"frameshift","missense")))
+
+clin_m <- clin[clin$cat=="missense",]
+#gnomad ClinVar plot 
+data_c <- clin_m %>%
+  group_by(Class) %>%
+  dplyr::summarise(count = n()) %>%
+  dplyr::mutate(fraction = count/sum(count)) 
+
+# there are two duplicates in the clinvar data set, G38S (One time B and one time LB) and S37G (both time VUS)
+# so I will subtract 1 from the VUS and 1 from the LB in the data_c table 
+
+data1 <- data_c[!is.na(data_c$Class),] # technically don't need this because data_c has no NAs in the Class variable 
+
+data1$Class <- factor(data1$Class, levels=c("B","LB","LP","P","VUS","Conf","NotProvided"))
+data1$percent = data1$count/sum(data1$count)
+
+
+p <- ggplot(data1, aes(x=1,y=percent, fill=Class)) +
+  geom_bar(width=,stat="identity",col="black") +
+  theme_void() + ggtitle("ClinVar Classifications")+
+  coord_polar(theta="y") + # Try to remove that to understand how the chart is built initially
+  xlim(c(-1, 2))+scale_fill_manual(values=c("dodgerblue4","skyblue2","lightsalmon1","darkred","grey62","grey90","white"))
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinV_class.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+# venn diagram 
+# lit variants 
+
+# total lit variants 
+# test is the database aggregating the variants seen in literature 
+# test has 63 unique variants 
+dim(test) #[1] 63 15
+test[which(test$mutation %ni% scores$mutation),"mutation"] # confirms that all the missense variants from test got carried over to scores1 (leftjoin of scores and test) 
+length(which(test$mutation %ni% scores$mutation)) # there are 10 such mutations 
+# so need 53 lit == "yes" in the scores1 database 
+
+# find any duplicates 
+b <- scores1[scores1$lit=="yes","mutation"]
+#
+b1 <- data.frame(table(b$mutation))
+dups <- unlist(b1[b1$Freq > 1,"Var1"])
+
+rw_variants <- unlist(lit_scores[lit_scores$cases>0,"mutation"]) # same as lit variants 
+
+clin_variants <- unlist(unique(clin_m$mutation)) # 106 
+
+#gnomad variants have one dup and a couple of fs 
+gnomad$cat = ifelse(gnomad$new=="X","nonsense",ifelse(gnomad$new == gnomad$orig, "synonymous", ifelse(grepl("fs",gnomad$mutation),"frameshift",
+                                                                      ifelse(grepl("dup",gnomad$mutation),"duplication","missense"))))
+gnomad_variants <- unlist(unique(gnomad[gnomad$cat=="missense", "mutation"])) # 101 
+
+# number of variants in clinvar only 
+a1 <- length(which(clin_variants %in% gnomad_variants))
+
+
+venny <- euler(c(AllMissense=2451,
+                 ClinVar=length(clin_variants)-length(Reduce(intersect,list(clin_variants,gnomad_variants)))+length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants)))-length(Reduce(intersect,list(clin_variants,rw_variants))),
+                 gnomAD=length(gnomad_variants)-length(Reduce(intersect,list(clin_variants,gnomad_variants)))+length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants)))-length(Reduce(intersect,list(gnomad_variants,rw_variants))),
+                 Literature = length(rw_variants)-length(Reduce(intersect,list(rw_variants,gnomad_variants)))+length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants)))-length(Reduce(intersect,list(clin_variants,rw_variants))),
+                 "gnomAD&ClinVar"=length(Reduce(intersect,list(clin_variants,gnomad_variants)))-length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants))),
+                  "gnomAD&Literature"=length(Reduce(intersect,list(rw_variants,gnomad_variants)))-length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants))),
+                 "ClinVar&Literature"=length(Reduce(intersect,list(clin_variants,rw_variants)))-length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants))),
+                 "gnomAD&ClinVar&Literature"=length(Reduce(intersect,list(clin_variants,gnomad_variants,rw_variants)))
+                 
+               ))
+p <- plot(venny, quantities=T, fill = c("white","lightblue","lightgoldenrod1","lightgreen"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"vennDiag.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+
+
+clin_scores <- as.data.frame(clin) %>% dplyr::select(.,"Condition(s)" , "Clinical significance (Last reviewed)","Protein change" ,"mutation","Class") %>% 
+  inner_join(., scores1)
+# the pos variable in clin is character because of "FS" so removing that here 
+
+clin_scores_m <- clin_scores[clin_scores$cat=="missense",]
+
+# 111 variants, 106 missense
+# dont need the following 
+# clin_scores$ClinV = ifelse(grepl("Pathogenic",clin_scores$`Clinical significance (Last reviewed)`),"P/LP",
+#                            ifelse(grepl("Likely pathogenic",clin_scores$`Clinical significance (Last reviewed)`),"P/LP",
+#                                   ifelse(grepl("benign",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"B/LB","Unknown")))
+# 
+# 
+# clin_scores$ClinV2 = ifelse(grepl("likely pathogenic",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"LP",
+#                             ifelse(grepl("likely b",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"LB",
+#                                    ifelse(grepl("conf",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"Conf",
+#                                           ifelse(grepl("uncertain",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"VUS",
+#                                   ifelse(grepl("pathogenic",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"P", 
+#                                         ifelse(grepl("benign",tolower(clin_scores$`Clinical significance (Last reviewed)`)),"B","NotProvided"))))))
+                             
+
+
+# all five categories
+clin_scores_m$Class = factor(clin_scores_m$Class,c("NotProvided","Conf","VUS","B", "LB", "LP", "P"))
+p <- ggplot(clin_scores_m[clin_scores_m$Class !="NotProvided",],aes(Class,trans_av, fill=Class))+
+  geom_boxplot(width=0.5)+
+  geom_point()+
+  theme_classic2()+
+  xlab("ClinVar Classification")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(clin_scores_m$Class))-1),
+           y = 1.3,
+           label = paste("n=",table(clin_scores_m$Class, exclude = "NotProvided", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")+
+  scale_color_manual(values=c("red","black"))
+p
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvar_vFunc_CLINVARONLY.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+traf <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/scores-allreps-norm-2023-02-19.txt", header=T, stringsAsFactors = F) %>% dplyr::rename("pos"="pos_corr", "mutation"="variants", "trans_av_traf"="trans_av","sd_av_traf"="sd_av","sem_traf"="sem", "cat_traf"="cat_ns")
+
+synon <- traf[traf$cat=="synonymous"]
+
+to1 = mean(synon$trans_av_traf)-3*sd(synon$trans_av_traf)
+to2 = mean(synon$trans_av_traf)+3*sd(synon$trans_av_traf)
+
+to3 = mean(synon$trans_av_traf)-1.96*sd(synon$trans_av_traf)
+to4 = mean(synon$trans_av_traf)+1.96*sd(synon$trans_av_traf)
+
+traf$CI_lower_traf = traf$trans_av_traf - 1.96*traf$sem_traf
+traf$CI_upper_traf = traf$trans_av_traf + 1.96*traf$sem_traf
+
+clin_scores_m_traf <- left_join(clin_scores_m,traf[,c("mutation","trans_av_traf","CI_upper_traf","CI_lower_traf")])
+
+p2 <- ggplot(clin_scores_m_traf[clin_scores_m_traf$Class !="NotProvided",],aes(Class,trans_av_traf, fill=Class))+
+  geom_boxplot(width=0.5)+
+  geom_point()+
+  theme_classic2()+
+  xlab("ClinVar Classification")+
+  ylab("Trafficking Score (+KCNQ1)")+
+  geom_hline(yintercept=c(to3,to4), color="black", lty=2)+
+  scale_fill_manual(values=c("grey62","grey90","dodgerblue4","skyblue2","lightsalmon1","darkred"), name="", na.value = "white")+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(clin_scores_m_traf$Class))-1),
+           y = 1.3,
+           label = paste("n=",table(clin_scores_m_traf$Class, exclude = "NotProvided", useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")+
+  scale_color_manual(values=c("red","black"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvar_vFunc_CLINVARONLY_traf.pdf",sep="")
+ggsave(p2, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+#Andrew's notes 
+# Clinvar B/LB (4)
+# V47I normal
+# L3P (already have) normal
+# G38S/S38G (already have) normal
+# G40S (already have) normal
+# E89K (1 in gnomad…) normal
+# 
+# Clinvar P/LP
+# T7I normal (no affected)
+# H73Y LOF
+# G52R LOF
+# M1L LOF
+# Y46C LOF (conflicting) # pathogenic in gnomad, Conf in clinvar # only conflict between clinvar and gnomad that I found 
+
+line_data = data.frame(xintercept = c(co1, co2, 
+                                      tapply(scores1$trans_av, scores1$mutationType =="synon", mean, na.rm=T)[2] + 1.96* tapply(scores1$trans_av, scores1$mutationType =="synon", sd, na.rm=T)[2],
+                                      tapply(scores1$trans_av, scores1$mutationType =="synon", mean, na.rm=T)[2] - 1.96* tapply(scores1$trans_av, scores1$mutationType =="synon", sd, na.rm=T)[2]),
+                       linecolor=c("3SD","3SD","1.96SD","1.96SD")
+                       )
+# B/LB v P/LP categories 
+# not done anymore
+
+# p <- ggplot(clin_miss,aes(ClinV,trans_av, fill=ClinV))+
+#   geom_boxplot()+
+#   geom_point()+
+#   theme_classic2()+
+#   xlab("")+
+#   ylab("Functional Score")+
+#   #geom_hline(yintercept = c(co1,co2), col="blue",lty=2)+
+#   geom_hline(aes(yintercept=xintercept, color=linecolor),data=line_data, lty=2)+
+#   scale_color_manual(values=c("red","black"))+
+#   scale_fill_manual(values=c("dodgerblue4","skyblue2","lightsalmon1","darkred","grey62","grey90"), name="", na.value = "white")+
+#   theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+#   annotate("text",
+#            x = 1:(length(table(clin_miss$ClinV))),
+#            y = 1.3,
+#            label = paste("n=",table(clin_miss$ClinV, exclude = "NA", useNA = "no"),sep=""),
+#            col = "black",
+#            vjust = - 1,
+#            family="Myriad Pro")
+# 
+# pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvar_vFunc_BLB_PLP.pdf",sep="")
+# ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+## combining clinvar and lit review 
+
+# at least 1 with LQTS and penet >= 10% (0.1) and gnomad < 2.5e-5
+```{r}
+ben1 <- unlist(clin_scores[clin_scores$Class %in% c("B","LB"),"mutation"])
+pat1 <- unlist(clin_scores[clin_scores$Class %in% c("P","LP"),"mutation"])
+
+scores1$put1 = ifelse((scores1$mutation %in% putative_nl$mutation | scores1$mutation %in% ben1),"WT-like",
+                     ifelse((scores1$mutation %in% putative_LoF$mutation | scores1$mutation %in% pat1),"LoF-like","NA"))
+
+scores1$CI_lower = scores1$trans_av - 1.96*scores1$sem
+scores1$CI_upper = scores1$trans_av + 1.96*scores1$sem
+
+p <- ggplot(scores1[scores1$put1 !="NA" & scores1$cat=="missense",],aes(put1,trans_av, fill=put1))+
+  geom_boxplot()+
+  geom_point()+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(aes(yintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_color_manual(values=c("red","black"))+
+  scale_fill_manual(values=c("bisque1","white"), name="", na.value = "white")+
+  theme(legend.position = "none", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(scores1[scores1$put1 !="NA" & scores1$cat=="missense","put1"]))),
+           y = 1.3,
+           label = paste("n=",table(scores1[scores1$put1 !="NA" & scores1$cat=="missense","put1"], exclude="NA",useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")#+
+  
+
+scores1$oddspath = ifelse(scores1$CI_upper<co3, "Functionally Abnormal", ifelse(scores1$CI_lower>co3, "Functionally Normal","Indeterminate"))
+test <- ggplot(scores1[scores1$put1 !="NA" & scores1$cat=="missense",],aes(put1,trans_av))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_point(aes(col=oddspath),position=position_jitter(width=0.1),size=2.5)+
+  #geom_pointrange(aes(ymin=CI_lower, ymax=CI_upper, col=oddspath),position=position_jitter(width=0.1))+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(yintercept=c(co1,co2,co3,co4),col="black", lty=2)+
+  scale_color_manual(name="",values=c("#b3653e","#3d5fb5","#decf8d"))+
+  #scale_fill_manual(values=c("bisque1","white"), name="", na.value = "white")+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(scores1[scores1$put1 !="NA" & scores1$cat=="missense","put1"]))),
+           y = 1.3,
+           label = paste("n=",table(scores1[scores1$put1 !="NA" & scores1$cat=="missense","put1"], exclude="NA",useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+  
+# no clean way to show error bars geom_errorbar(aes(ymin=CI_lower, ymax=CI_upper),data=scores1[scores1$put1 !="NA" & scores1$cat=="missense",],alpha=0.5,)
+
+# number of functionally abnormal
+# the functional score upper CI needs be below the co3 cutoff 
+length(which(scores1$cat =="missense" & (scores1$put1 %in% c("LoF-like","WT-like")) & scores1$oddspath=="Functionally Abnormal"))
+# 17 
+
+# indeterminate 
+length(which(scores1$cat =="missense" & (scores1$put1 %in% c("LoF-like","WT-like")) & scores1$oddspath=="Indeterminate")) #3
+
+# functionally normal
+length(which(scores1$cat =="missense" & (scores1$put1 %in% c("LoF-like","WT-like")) & scores1$oddspath=="Functionally Normal")) #21
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlit_vFunc.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlit_vFuncOddsPath.pdf",sep="")
+ggsave(test, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+# separating OddsPath calibration by LQT and SIDS/SADS 
+scores1$color = ifelse(is.na(scores1$`Hets with SIDS/SADS`),"NA",
+  ifelse(scores1$`Hets with SIDS/SADS` >0, "SIDS/SADS","LQT only"))
+
+# to see the combination of values:
+scores1[scores1$cat=="missense",] %>% group_by(color,put1) %>% summarize(n= n_distinct(mutation))
+```
+# FOR MISSENSE ONLY 
+# initially, had 22 LoF like 
+# so there are 18 LQT only LoF like, and 3 SIDS/SADS LoF like, and 1 no lit values (comes from clinvar)
+# initially had 19 WT-like 
+# there are 9 LQT-WT like, no SIDS/SADS wt-like, and 10 WT-like from clinvar
+
+# need to combine the WT like into 1 category 
+# need to combine the LQT LoF-like and 1 no lit values LoF-like 
+
+
+```{r}
+scores1$color2 = ifelse(scores1$put1 =="WT-like", scores1$put1, 
+                         ifelse(scores1$put1!="LoF-like",NA, ifelse(scores1$color != "SIDS/SADS", scores1$put1,"SIDS/SADS cases")))
+
+# of note, the following mutations contribute to SIDS/SADS
+# "F54V"    "L48F"    "R67H"    "R67L"    "T20I"
+#     1          1        10         2         1
+# R67H is too common in gnomad to be called putative LoF
+# R67L is the only one with 1 LQTS case and 1 SIDS/SADS and too rare in gnomad (so technically could be LQTS case?)
+
+test <- ggplot(scores1[scores1$color2 !="NA" & scores1$cat=="missense",],aes(color2,trans_av))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_point(aes(col=oddspath),position=position_jitter(width=0.1),size=2.5)+
+  #geom_pointrange(aes(ymin=CI_lower, ymax=CI_upper, col=oddspath),position=position_jitter(width=0.2))+
+  theme_classic2()+
+  xlab("")+
+  ylab("Functional Score")+
+  geom_hline(yintercept=c(co1,co2,co3,co4),col="black", lty=2)+
+  scale_color_manual(name="",values=c("#b3653e","#3d5fb5","#decf8d"))+
+  #scale_fill_manual(values=c("bisque1","white"), name="", na.value = "white")+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  #ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  annotate("text",
+           x = 1:(length(table(scores1[scores1$color2 !="NA" &  scores1$cat=="missense","color2"]))),
+           y = 1.3,
+           label = paste("n=",table(scores1[scores1$color2 !="NA" & scores1$cat=="missense","color2"], exclude="NA",useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlit_vFuncOddsPath_SIDSsep.pdf",sep="")
+ggsave(test, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+scores1_traf <- left_join(scores1,traf[,c("mutation","trans_av_traf","CI_upper_traf","CI_lower_traf")])
+
+scores1_traf$oddspath_traf = ifelse(scores1_traf$CI_upper_traf<to3, "Loss of trafficking", ifelse(scores1_traf$CI_lower_traf>to4, "Gain of trafficking", ifelse(scores1_traf$CI_lower_traf>to3 & scores1_traf$CI_upper_traf<to4,"Normal trafficking","Indeterminate")))
+                                                                                                  
+col_indet = c("Gain of trafficking"="#b3653e","Normal trafficking"="#3d5fb5","Loss of trafficking"="grey","Indeterminate"="#decf8d")
+test2 <- ggplot(scores1_traf[scores1_traf$color2 !="NA" & scores1_traf$cat=="missense",],aes(color2,trans_av_traf))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_point(aes(col=oddspath_traf),position=position_jitter(width=0.1),size=2.5)+
+  #geom_pointrange(aes(ymin=CI_lower, ymax=CI_upper, col=oddspath),position=position_jitter(width=0.2))+
+  theme_classic2()+
+  xlab("")+
+  ylab("Trafficking Score (+KCNQ1)")+
+  geom_hline(yintercept=c(to3,to4),col="black", lty=2)+
+  scale_color_manual(name="",values=col_indet)+
+  #scale_fill_manual(values=c("bisque1","white"), name="", na.value = "white")+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  #ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  annotate("text",
+           x = 1:(length(table(scores1_traf[scores1_traf$color2 !="NA" &  scores1_traf$cat=="missense","color2"]))),
+           y = 1.3,
+           label = paste("n=",table(scores1_traf[scores1_traf$color2 !="NA" & scores1_traf$cat=="missense","color2"], exclude="NA",useNA = "no"),sep=""),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlit_vFuncOddsPath_SIDSsep_traf.pdf",sep="")
+ggsave(test2, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+# roc curve with combined (clinvar and lit review )
+```{r}
+scores_roc <- scores1[scores1$put1 != "NA",c("mutation","trans_av","put1")] # use put if only want lit review and gnomad, put1 if want clinvar and lit review 
+scores_roc$put1_numeric = ifelse(scores_roc$put1 =="WT-like",0,ifelse(scores_roc$put1 =="LoF-like",1,NA))
+# cases are always more than controls 
+
+cons <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project//Figures/dbNSFP_KCNE1_scores_clean.csv", header=T, stringsAsFactors = F) %>% dplyr::rename("pos"="aapos","orig"="aaref","new"="aaalt") %>% dplyr::select(-alt, -ref, -genename)
+  
+  
+cons$mutation= ifelse(cons$pos ==38 & cons$new=="G", paste(cons$new,cons$pos,cons$orig,sep=""),
+                      ifelse(cons$pos ==38, paste("G",cons$pos,cons$new,sep=""), paste(cons$orig,cons$pos,cons$new,sep="")))
+                    
+
+# cons has the same problem as gnomad, i.e. different SNPs leading to the same protein consequence 
+# because the scores are calculated on protein, will keep first row 
+
+x <- data.frame(table(cons$mutation))
+dups_cons <- unlist(x[x$Freq>1,"Var1"])
+
+# removing duplicates from the cons dataset and keeping first row only 
+df <- setDT(cons)[, .SD[sample(seq_len(.N), 1)], .(mutation,pos,new,orig)]
+  
+```
+
+
+```{r}
+head(df)
+cons_roc1 <- left_join(scores_roc,df) %>% dplyr::mutate(put1 = as.factor(put1))
+
+#traf$CI_lower = traf$trans_av - 1.96*traf$sem
+#traf$CI_upper = traf$trans_av + 1.96*traf$sem
+
+cons_roc <- left_join(cons_roc1, traf)
+######################
+######################
+### NOT USING THIS ###
+######################
+######################
+
+# PRROC package, not using this 
+# look at the next block 
+# roc<-roc.curve(scores.class0 = cons_roc$trans_av, weights.class0 = cons_roc$put1_numeric, curve=T)
+# roc<-roc.curve(scores.class0 = -1*cons_roc$Polyphen2_HVAR_score, weights.class0 = cons_roc$put1_numeric, curve=T)
+# pr <- pr.curve(scores.class0 = as.numeric(scores_roc$trans_av), weights.class0 = scores_roc$put1_numeric, curve=T)
+# 
+# plot(roc, main="ROC Function", rand.plot=T, max.plot=T, min.plot=T)
+# plot(pr, main="PR Function ")
+# 
+### for each pre
+```
+
+```{r}
+library(pROC)
+
+head(cons_roc)
+
+# one way to do ROC plots 
+rocobj1 <- plot.roc(cons_roc$put1, cons_roc$trans_av,
+                    percent = TRUE, family="Myriad Pro", xlim=c(100,0))
+rocobj1.1 <- lines.roc(cons_roc$put1, cons_roc$trans_av_traf, percent=TRUE, col="#1c61b6")
+rocobj2 <- lines.roc(cons_roc$put1, cons_roc$SIFT_score, percent=TRUE, col="#1c61b6")
+rocobj3 <- lines.roc(cons_roc$put1, -1*cons_roc$Polyphen2_HVAR_score, percent=TRUE, col="#008600")
+rocobj4 <- lines.roc(cons_roc$put1, cons_roc$PROVEAN_score, percent=TRUE, col="#840000")
+rocobj5 <- lines.roc(cons_roc$put1, -1*cons_roc$CADD_raw, percent=TRUE, col="#FFA500")
+legend("bottomright", legend=c("DMS Functional", "DMS Trafficking", "SIFT", "Polyphen","PROVEAN","CADD"), col=c("black", "grey", "#1c61b6", "#008600","#840000","#FFA500"), lwd=2)
+
+testobj <- roc.test(rocobj1, rocobj3)
+
+roc_list <- roc(put1 ~ trans_av +trans_av_traf + CADD_raw + PROVEAN_score + Polyphen2_HVAR_score+REVEL_score+SIFT_score, data = cons_roc)
+
+data.auc <- roc_list %>% 
+  map(~tibble(AUC = .x$auc))%>% bind_cols()
+
+colnames(data.auc) = names(roc_list) 
+
+thresh <- as.data.frame(cbind(roc_list$trans_av$thresholds, roc_list$trans_av$sensitivities, roc_list$trans_av$specificities)) %>% magrittr::set_colnames(c("threshold", "sensitivities", "specificities"))
+
+
+######################
+######################
+### NOT USING THIS ###
+######################
+######################
+# ggroc(roc_list,size=1,c_string="c", cutoffs.at=line_data$xintercept)+
+#   theme_classic2()+
+#   geom_abline(slope=1,intercept = 1, col="lightgrey",lty=2)+
+#   #scale_x_continuous(expand = c(0,0))+
+#   scale_color_manual(values=c("black", "grey", "#1c61b6", "#008600","#840000","#FFA500","red"), name="", labels = paste(c("DMS Functional", "DMS Trafficking", "CADD","PROVEAN", "Polyphen","REVEL","SIFT"),round(data.auc,2)))
+
+
+# pull out AUCs 
+
+# as reference: 
+#ggroc(list(s100b=rocobj, wfns=rocobj2, ndka=roc(aSAH$outcome, aSAH$ndka)))
+
+
+# need scores_roc in the put1 columns as factor. 
+```
+
+```{r}
+library(plotROC)
+library(pals)
+old_labels = c("trans_av","SIFT_score", "trans_av_traf", "LRT_score","PROVEAN_score","REVEL_score_neg","CADD_raw_neg","phyloP100way_vertebrate_neg","phastCons100way_vertebrate_neg","Polyphen2_HVAR_score_neg")
+new_labels =c("DMS Function","SIFT","DMS Trafficking", "LRT","PROVEAN","REVEL","CADD","PhyloP100","PhastCons100","Polyphen2")
+
+x_roc <- cons_roc %>% dplyr::select(., "orig","pos","new","mutation", "trans_av", "trans_av_traf",  "put1", "SIFT_score","Polyphen2_HVAR_score","LRT_score","PROVEAN_score","REVEL_score","CADD_raw","phyloP100way_vertebrate",
+                             "phastCons100way_vertebrate")%>% dplyr::mutate(REVEL_score_neg = -1*REVEL_score, CADD_raw_neg = -1*CADD_raw, phyloP100way_vertebrate_neg=-1*phyloP100way_vertebrate, phastCons100way_vertebrate_neg = -1*phastCons100way_vertebrate, Polyphen2_HVAR_score_neg = -1*Polyphen2_HVAR_score, .keep="unused") %>% rename_at(vars(old_labels), ~ new_labels) %>%  melt(., id=c("orig","pos","new","mutation","put1")) 
+# need to flip REVEL and CADD and the phyloP scores because of negative associations
+# 
+
+# removing the SIDS/SADS
+fre <- unlist(lit_scores[which(lit_scores$`Hets with SIDS/SADS`>0),"mutation"])
+
+dms <- x_roc[x_roc$variable %in% c("DMS Function","DMS Trafficking"),]
+paletter <- wes_palette("Cavalcanti1", 10, type = "continuous")
+paletter2 <- c(paletter[1],paletter[2],"#5A5156", "#E4E1E3", "#F6222E" ,"#FE00FA", "blue", "#3283FE" ,"black", "#B00068")
+
+# the rgb codes are generated by as.character(polychrome(8))
+
+p <- ggplot(dms[dms$mutation %ni% fre,], aes(d = put1, m = as.numeric(value),col=variable)) + geom_roc(increasing=TRUE,cutoffs.at = c(co3,to3),cutoff.labels = round(c(co3,to3),2), pointsize=0.5)
+
+
+# just the DMS data 
+# probably main panel 
+p1 <- p + theme_classic()+theme(legend.position = "none")+
+  xlab("1-Specificity")+
+    ylab("Sensitivity")+
+  theme(text=element_text(family="Myriad Pro"))+
+  annotate("text", x = 1, y = seq(0,0+2*0.04-0.04,by=0.04),hjust=1,
+           label = paste(calc_auc(p)$variable,"=", round(calc_auc(p)$AUC, 2)),family="Myriad Pro", col=c(paletter[1],paletter[2]))+
+  scale_color_manual(values=paletter)+
+  geom_abline(slope=1,intercept=0, col="lightgrey",lty=2)
+
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlitAUC.pdf",sep="")
+ggsave(p1, filename = pdfName, height= 4, width = 5,device = cairo_pdf, units = "in")
+
+
+# multiple ones 
+# probably supplement
+
+q <- ggplot(x_roc[x_roc$mutation %ni% fre,], aes(d = put1, m = as.numeric(value),col=variable)) + geom_roc(increasing=TRUE, n.cuts=0, pointsize=0.5)
+
+q1 <- q+ theme_classic()+theme(legend.position = "none")+
+  xlab("1-Specificity")+
+    ylab("Sensitivity")+
+  theme(text=element_text(family="Myriad Pro"))+
+  annotate("text", x = 1, y = seq(0,0+10*0.04-0.04,by=0.04),hjust=1,
+           label = paste(calc_auc(q)$variable,"=", round(calc_auc(q)$AUC,2)),family="Myriad Pro", col=paletter2)+
+  scale_color_manual(values=paletter2)+
+  geom_abline(slope=1,intercept=0, col="lightgrey",lty=2)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"clinvarNlitAUC_allcomp.pdf",sep="")
+ggsave(q1, filename = pdfName, height= 4, width = 5,device = cairo_pdf, units = "in")
+
+#combining CADD and functional scores.
+# of note, higher cad scores - worse outcomes (so one way of doing it would be trans - CADD)
+# CADD is on a scale from -0.13 to 5.69 so will need to linear transform before doing this calculation 
+
+#############
+#############
+###  TBD  ###
+#############
+#############
+
+cons_roc$combo = cons_roc$trans_av*10 - cons_roc$CADD_raw 
+
+combo_roc <- cons_roc %>% dplyr::select(., "orig","pos","new","mutation", "trans_av", "trans_av_traf",  "put1", "SIFT_score","Polyphen2_HVAR_score","LRT_score","PROVEAN_score","REVEL_score","CADD_raw","phyloP100way_vertebrate",
+                             "phastCons100way_vertebrate","combo")%>% dplyr::mutate(REVEL_score_neg = -1*REVEL_score, CADD_raw_neg = -1*CADD_raw, phyloP100way_vertebrate_neg=-1*phyloP100way_vertebrate, phastCons100way_vertebrate_neg = -1*phastCons100way_vertebrate, Polyphen2_HVAR_score_neg = -1*Polyphen2_HVAR_score,.keep="unused") %>% rename_at(vars(old_labels), ~ new_labels) %>%  melt(., id=c("orig","pos","new","mutation","put1"))
+
+q2 <- ggplot(combo_roc[combo_roc$mutation %ni% fre,], aes(d = put1, m = value,col=variable)) + geom_roc(increasing=TRUE, n.cuts=0, pointsize=0.5)
+
+q3 <- q2+ theme_classic()+theme(legend.position = "none")+
+  xlab("1-Specificity")+
+    ylab("Sensitivity")+
+  theme(text=element_text(family="Myriad Pro"))+
+  annotate("text", x = 1, y = seq(0,0+11*0.04-0.04,by=0.04),hjust=1,
+           label = paste(calc_auc(q2)$variable,"=", round(calc_auc(q2)$AUC, 5)),family="Myriad Pro", col=c(paletter,"lightgrey"))+
+  scale_color_manual(values=c(paletter,"lightgrey"))+
+  geom_abline(slope=1,intercept=0, col="lightgrey",lty=2)
+
+```
+
+```{r}
+# adding DDG 
+a=read.csv('~/Dropbox/Andrew - Ayesha/KCNE1/PAPER/Final map datasets/function_score_short.csv',stringsAsFactors=FALSE)
+b=read.csv('~/Dropbox/Andrew - Ayesha/KCNE1/PAPER/Figure 6 Disease correlation/Alanine scanning/17545244 and 17130521 scanning.csv',stringsAsFactors = FALSE)
+dim(a) #2539x2
+dim(b) #85x5
+ab=merge(a,b)
+
+abc = inner_join(ab,scores1)
+
+p <- ggplot(abc,aes(trans_av,abs(ddg)))+
+  geom_point()+
+  stat_cor(method="spearman",cor.coef.name = "rho", family="Myriad Pro")+
+  theme_classic()+
+  stat_smooth(method = "lm",col="black",lty=2,se=FALSE)+
+  theme(text=element_text(family="Myriad Pro"))+
+  xlab("Functional Score")+
+  ylab("\U0394\U0394\U03A8")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"alascanning.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+```{r}
+# single SNP analysis: 
+library("Biostrings")
+
+KCNE1 = DNAString("atgatcctgtctaacaccacagcggtgacgccctttctgaccaagctgtggcaggagacagttcagcagggtggcaacatgtcgggcctggcccgcaggtccccccgcagcggtgacggcaagctggaggccctctacgtcctcatggtactgggattcttcggcttcttcaccctgggcatcatgctgagctacatccgctccaagaagctggagcactcgaacgacccattcaacgtctacatcgagtccgatgcctggcaagagaaggacaaggcctatgtccaggcccgggtcctggagagctacaggtcgtgctatgtcgttgaaaaccatctggccatagaacaacccaacacacaccttcctgagacgaagccttccccatga")
+
+bases <- c("A","C","T","G")
+
+singleSNP <- data.frame("basepos"=double(),"origBase"=character(), "newBase"= character(),"origCodon" = character(), "newCodon" = character(), "pos"=double(),
+                        "orig"=character(),"new"=character())
+
+for (i in 1:nchar(KCNE1)){
+  # basepos is i 
+  origB = as.character(substring(KCNE1,i,i))
+  posi = ceiling(i/3) # codon to be extracted, i.e. "pos"
+  origcod = as.character(codons(KCNE1)[posi]) # original codon 
+  for (j in bases){
+    KCNE1_a <- Biostrings::replaceLetterAt(KCNE1, i, j) # variant sequence 
+    newcod = as.character(codons(KCNE1_a)[posi])
+    origAA = as.character(Biostrings::translate(DNAString(origcod),no.init.codon = T))
+    newB = j
+    newAA = as.character(Biostrings::translate(DNAString(newcod),no.init.codon = T))
+    singleSNP[nrow(singleSNP)+1,]= c(i, origB, newB, origcod,newcod,posi,origAA,newAA)
+    
+  }
+}
+
+singleSNP$orig <- sub("\\*",'X',singleSNP$orig)
+singleSNP$new <- sub("\\*",'X',singleSNP$new)
+
+purine = c("A","G")
+pyrimidine = c("C","T")
+singleSNP$mutation=paste(singleSNP$orig,singleSNP$pos,singleSNP$new,sep="")
+
+singleSNP$dnaMutType = ifelse((singleSNP$origBase %in% purine & singleSNP$newBase %in% purine) | 
+                                (singleSNP$origBase %in% pyrimidine & singleSNP$newBase %in% pyrimidine), "transition","transversion")
+
+# merging with trafficking and functional scores 
+
+snp <- singleSNP[which(as.numeric(singleSNP$basepos)<388 & as.numeric(singleSNP$basepos) >3),] %>% left_join(.,scores[,c("mutation", "trans_av","cat")]) %>% left_join(., traf[,c("mutation","trans_av_traf")])
+# skipping the last codon and first codon because that will mess with protein) 
+
+snp$cat = ifelse(snp$orig == snp$new, "synon",snp$cat)
+length(unique(snp[which(!is.na(snp$trans_av)),"mutation"])) #773
+length(unique(snp$mutation))
+```
+
+
+```{r}
+melt_snp <- melt(snp,by=,c("basepos","origBase","newBase","origCodon","newCodon","pos","orig","new","mutation","dnaMutType","cat"))
+
+p1 <- ggplot(snp, aes(trans_av, col=dnaMutType))+
+  geom_density(alpha=0.5)+
+  theme_classic()+
+  scale_color_manual(values=c("black","grey"))+
+  xlab("Functional Score")+
+  theme(text=element_text(family="Myriad Pro"), legend.position ="none")
+
+wilcox.test(trans_av~ dnaMutType, data=snp)
+wilcox.test(trans_av_traf~ dnaMutType, data=snp)
+
+p2 <- ggplot(snp, aes(trans_av_traf, col=dnaMutType))+
+  geom_density(alpha=0.5)+
+  theme_classic()+
+  scale_color_manual(values=c("black","grey"))+
+  xlab("Trafficking Score (+KCNQ1)")+
+  theme(text=element_text(family="Myriad Pro"))
+
+ggplot(melt_snp, aes(value, dnaMutType, fill=variable))+geom_violin()+theme_classic()+geom_vline(xintercept = 1, lty=2)
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_transVtrans_fitness.pdf",sep="")
+ggsave(p1+p2 + plot_annotation(tag_levels = 'A') & theme(legend.position = "bottom"), filename = pdfName, height= 4, width =6,device = cairo_pdf, units = "in")
+
+```
+
+```{r}
+nonSNP <- scores[scores$mutation %ni% snp$mutation, c("mutation","orig","pos","new","trans_av")]
+
+scores1_traf$sinSNP = ifelse(scores1_traf$mutation %in% snp$mutation, "Single SNP", "Other variants")
+
+wilcox.test(trans_av~ sinSNP, data=scores1_traf)
+wilcox.test(trans_av_traf~ sinSNP, data=scores1_traf)
+
+p <- ggplot(scores1_traf, aes(trans_av, fill =sinSNP))+
+  geom_density(aes(col=sinSNP),alpha=0.5)+
+  geom_histogram(aes(y=..density..), alpha=0.25)+
+  theme_classic()+
+  xlab("Functional Score")+
+  ylab("Density")+
+  scale_color_manual(values=c("black","cornflowerblue"), guide="none")+
+  scale_fill_manual(name="",values=c("black","cornflowerblue"))+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_singSNPVother_fitness.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width =4,device = cairo_pdf, units = "in")
+
+p <- ggplot(scores1_traf, aes(trans_av_traf, fill =sinSNP))+
+  geom_density(aes(col=sinSNP),alpha=0.5)+
+  geom_histogram(aes(y=..density..), alpha=0.25)+
+  theme_classic()+
+  xlab("Trafficking Score (+KCNQ1")+
+  ylab("Density")+
+ scale_color_manual(values=c("black","cornflowerblue"), guide="none")+
+  scale_fill_manual(name="",values=c("black","cornflowerblue"))+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_singSNPVother_traf.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width =4,device = cairo_pdf, units = "in")
+
+```
+
+
+```{r}
+cleanCollapseDF=function(b3,categoryCols,numericCols,operation){
+  b6=data.frame()
+  firsttime=TRUE
+  for(i in 1:length(uniqueMuts)){
+    currMut=uniqueMuts[i]
+    b4=b3[b3$mutation==currMut,]
+    #print(dim(b4))
+    if(nrow(b4)>1){
+      #print(b4)
+      b5=b4[1,]
+      # Category columns
+      for(colNum in categoryCols){
+        currData=b4[,colNum]
+        currData=unique(na.omit(currData))
+        #print(currData)
+        if(length(currData)==0){
+          finalVal=NA
+        }
+        else if(length(currData)==1){
+          finalVal=currData
+        } else{
+          finalVal=paste(currData,collapse=';')
+        }
+        b5[colNum]=finalVal
+      }
+      #Numeric columns
+      for(colNum in numericCols){
+        currData=b4[,colNum]
+        currData=unique(na.omit(currData))
+        #print(currData)
+        if(length(currData)==0){
+          finalVal=NA
+        }
+        else if(length(currData)==1){
+          finalVal=currData
+        } else{
+          if(operation=='mean'){
+            finalVal=mean(currData)
+          } else{
+            finalVal=sum(currData)
+          }
+        }
+        b5[colNum]=finalVal
+      }
+    }
+    else{
+      b5=b4
+    }
+    b5$numValues=nrow(b4)
+    if(firsttime){
+      b6=b5
+      firsttime=FALSE
+    } else{
+      b6=rbind(b6,b5)
+    }
+  }
+  return(b6)
+}
+```
+
+
+# TBD
+```{r}
+
+# start with master_lit
+
+# patch <- master_lit[master_lit$PatchData =="yes"] %>% dplyr::select(.,"PMID","mutation","OtherInVitro":"ddg") %>% group_by(mutation,) %>% 
+#   summarize(across(c(`PMID`,`OtherInVitro`,`Trafficking system`, `Patch System`,), ~trimws(paste0(.x, collapse="|"))),
+#             across(`Trafficking (%WT)` = mean(`Trafficking (%WT)`, na.rm=T)),
+#             across(`DN current (Mut+WT% of WT+WT)`:`ddg`, mean, na.rm=T),
+#             n = n_distict(`PMID`)) %>% ungroup()
+
+###### THIS IS ONLY FOR THE MANUAL PATCH DATA BECAUSE THERE ARE ERRORS IN PATIENT COUNTS THAT ARE CORRECTED IN MASTER LIT BUT NOT IN B BELOW #####
+#b=read.csv('~/Dropbox/Andrew - Ayesha/KCNE1/PAPER/Figure 7 Disease correlation/Alanine scanning/17545244 and 17130521 scanning.csv',stringsAsFactors = FALSE)
+b=read.csv('~/Dropbox/Andrew - Ayesha/KCNE1/PAPER/Figure 6 Disease correlation/KCNE1_litReview_forR_2.2.23.csv',stringsAsFactors = FALSE)
+dim(b) #268x41
+
+# Processing b for patch data
+b2=b[,c(1:2,8:25)]
+b3=b2[b2$PatchData=='yes',]
+
+uniqueMuts=unique(b3$mutation)
+
+old_labels <- colnames(b3)
+new_labels <- colnames(master_lit[,c(1:2,8:25)])
+
+uniqueMuts=unique(b3$mutation)
+
+
+b4 <- b3 %>% group_by(variant) %>% 
+  summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else paste(.,collapse=";"))) %>% rename_at(vars(old_labels), ~ new_labels) %>% ungroup() 
+# b4=cleanCollapseDF(b3,categoryCols=c(1:5,7),numericCols=c(6,8:20),operation='mean') %>% 
+
+patch=merge(scores1,b4) #83x7 so we have DMS scores for all but 2 variants that they studied
+
+
+# since the V1/2 act for WT is 19.6, subtracting that from the value 
+manual <- data.frame("mutation"=c("WT","I61X","G25V","G60D","D76N","G55X","F57Y","R98W","D85N","F53X",
+                                "L3P","E19D","D39G","E101V","T125M","P127T"),
+                    "I-20"=c(15.89,0,34.78,28.49,0.18,0.18,2.54,4.73,32.3,10.03,
+                            4.8,6.69,43.9,9.08,2.99,4.8),
+                    "I0"=c(48.56,0.03,87.4,71.5,3.19,0.19,14.86,15.26,117.22,41.94,
+                          30.3,25.07,112.5,22.39,9.36,13.1),
+                    "I20"=c(92.1,0.01,156.1,114.9,10.1,0.20,48.78,31.72,215.59,91.23,
+                           79.9,52.15,185.1,33.38,20.43,22.7),
+                    "cell"=c(rep("HEK",8),rep("CHO",3),rep("HEK",4),"CHO")) %>% full_join(.,data.frame("mutation"=c("WT","G25V","G60D","D76N","F57Y","R98W","D85N","F53X","L3P","E19D","D39G","E101V","T125M"),
+                  "V1/2act (Mut-WT)"=c(19.6,1.3,17.7,5.7,17.7,6.8,-0.49,21.1,22.2,4.9,-8.3,6.4,7.5)-19.6))
+
+old_labels <- colnames(manual)
+new_labels <- c("mutation","Peak-20 (%)", "Peak0 (%)",   "Peak20 (%)","Patch System", "V1/2act (Mut-WT)")
+wt_peak = manual[manual$mutation=="WT","I20"]
+manual$`Peak summary` = 100*manual$I20/wt_peak
+manual$source = "This Study"
+manual <- manual %>% rename_at(vars(old_labels), ~ new_labels)
+#manual$`V1/2act (Mut-WT)` = manual$`V1/2act` -19.6
+
+fileName = paste(Sys.Date(),"supplementalTable2.txt",sep="-")
+fwrite(manual, fileName, row.names = F, quote = F, sep="\t")
+
+
+patch$source ="Literature Review"
+x <- colnames(manual)
+
+manual_lit <- patch %>% select(x) %>% rbind(.,manual) %>% left_join(.,scores1[,c("mutation","trans_av", "CI_upper","CI_lower","oddspath","sem")]) %>% left_join(.,traf[,c("mutation","trans_av_traf","CI_upper_traf","CI_lower_traf")])
+
+manual_lit2 <- manual_lit %>% group_by(mutation) %>% 
+  summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else paste(.,collapse=" &\n"))) %>% 
+  #summarize(across(where(is.character), ~trimws(paste0(.x, collapse="|")))) %>% 
+  #summarise(across(where(is.numeric), mean, na.rm = TRUE)) %>% 
+  #summarise_if(is.character,~trimws(paste0(.x, collapse="|")))
+  ungroup() 
+
+# numbers of variants 
+#with peak summary 
+length(which(!is.na(manual_lit2$`Peak summary`))) #71
+
+# loss of peak summary
+length(which(manual_lit2$`Peak summary` <= 25)) #28 
+length(which(manual_lit2$`Peak summary` <25 & manual_lit2$CI_upper<co3)) #25
+length(which(manual_lit2$`Peak summary` <25 & manual_lit2$CI_upper<co3 & manual_lit2$CI_upper_traf < to3)) #6
+
+# peak summary and functional scores
+dfXYZ <- manual_lit2[which(manual_lit2$`Peak summary` <= 25),]
+length(which(dfXYZ$CI_upper < co3)) #26
+nrow(dfXYZ) #29
+length(which(dfXYZ$trans_av_traf < to3)) # 11
+
+# 
+dfXYZ <- manual_lit2[which(manual_lit2$`Peak summary` > 50),] 
+length(which(dfXYZ$CI_lower > co3)) #26
+nrow(dfXYZ) #29
+length(which(dfXYZ$trans_av_traf > to3)) # 11
+
+p <- ggscatter(manual_lit2, x="trans_av", y="Peak summary",conf.int = TRUE, col="source")+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  xlab("Functional Score")+
+  ylab("Peak Current (%WT)")+
+  # ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("#648FFF","#DC267F","#FFB000"),name="")+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  geom_hline(yintercept = 100, col="red",lty=2,linewidth=0.5)
+# +  geom_errorbarh(aes(xmin=(trans_av - sem), xmax=trans_av +sem,col=source,alpha=0.5),data=manual_lit2)
+
+#+geom_point(aes(trans_av,`Peak summary`,col=source),data=manual_lit2)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdata_lit+manual.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+p2 <- ggscatter(manual_lit2, x="trans_av_traf", y="Peak summary",conf.int = TRUE, col="source")+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  xlab("Trafficking Score (+KCNQ1)")+
+  ylab("Peak Current (%WT)")+
+  # ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("#648FFF","#DC267F","#FFB000"),name="")+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  geom_hline(yintercept = 100, col="red",lty=2,linewidth=0.5)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdata_lit+manual_traf.pdf",sep="")
+ggsave(p2, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+# Numbers of variants 
+
+```
+
+
+```{r}
+# V1/2 activation 
+
+length(which(!is.na(patch$`V1/2act (Mut-WT)`))) # 121 variants for which V1/2 act 
+
+# lit review only 
+p <- ggplot(patch,aes(trans_av,abs(`V1/2act (Mut-WT)`)))+geom_point()+stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "black", alpha =0.5, linewidth=0.5, fullrange=T)+
+  theme_classic()+
+  theme(text=element_text(family="Myriad Pro"))+
+  xlab("Functional Score")+
+  ylab(expression(V [1/2]*" activation normalized to WT"))+
+geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )
+  
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdataV12_lit.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+# lit review and tao's data
+p <- ggplot(manual_lit2,aes(trans_av,abs(`V1/2act (Mut-WT)`)))+geom_point(aes(col=source))+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  theme_classic()+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")+
+  xlab("Functional Score")+
+  ylab(expression(V [1/2]*" activation normalized to WT"))+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  scale_color_manual(values=c("#648FFF","#DC267F","#FFB000"),name="")+
+  geom_hline(yintercept = 0, col="red",lty=2,linewidth=0.5)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdataV12_lit+Tao.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+p2 <- ggplot(manual_lit2,aes(trans_av_traf,abs(`V1/2act (Mut-WT)`)))+geom_point(aes(col=source))+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  theme_classic()+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")+
+  xlab("Trafficking Score (+KCNQ1)")+
+  ylab(expression(V [1/2]*" activation normalized to WT"))+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  scale_color_manual(values=c("#648FFF","#DC267F","#FFB000"),name="")+
+  geom_hline(yintercept = 0, col="red",lty=2,linewidth=0.5)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdataV12_lit+Tao_traf.pdf",sep="")
+ggsave(p2, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+```{r}
+# tau for deactivation
+
+p <-  ggscatter(patch, x="trans_av", y="TauDeact (Mut/WT %)",conf.int = TRUE, col="source")+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  xlab("Functional Score")+
+  ylab(expression(tau *" (% of WT)" ))+
+  # ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("black"),name="")+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  geom_hline(yintercept = 100, col="red",lty=2,linewidth=0.5)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdataTao_lit+Tao_deact.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+patch_traf <- left_join(patch, traf[,c("mutation","trans_av_traf","CI_upper_traf","CI_lower_traf")])
+p2 <- ggscatter(patch_traf, x="trans_av_traf", y="TauDeact (Mut/WT %)",conf.int = TRUE, col="source")+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  geom_smooth(method = "lm", color = "grey", alpha =0.5, linewidth=0.5, fullrange=T)+
+  xlab("Trafficking Score (+KCNQ1)")+
+  ylab(expression(tau *" (% of WT)" ))+
+  # ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("black"),name="")+
+  geom_vline(xintercept = c(co3,co4),color = "black", lty=2, linewidth=0.5  )+
+  geom_hline(yintercept = 100, col="red",lty=2,linewidth=0.5)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"patchdataTao_lit+Tao_deact_traf.pdf",sep="")
+ggsave(p2, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+

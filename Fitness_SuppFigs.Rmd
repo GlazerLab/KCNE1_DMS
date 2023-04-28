@@ -1,0 +1,1695 @@
+---
+title: "Fitness assay"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(data.table)
+library(corrplot)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(RColorBrewer)
+library(gplots)
+library(colorspace)
+library("ggpubr")
+library("gridExtra")
+library("GGally")
+library("ggridges")
+library(wesanderson)
+library("sjmisc")
+library("patchwork")
+library(scales)
+library("extrafont")
+library("gghighlight")
+`%ni%` = Negate(`%in%`)
+loadfonts()
+library(stringr)
+```
+
+
+```{r}
+setwd("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Fitness")
+
+df1 <- fread("df1_KCNE1_rerun_d0_d8_d20.csv", header=T, stringsAsFactors = F) %>% dplyr::filter(.,mutType !="wt")
+
+df1$tot.adj = 1e6 * (df1$count/(sum(df1$count, na.rm = T)))
+
+num4 <- aggregate(tot.adj~mutation, data=df1, FUN=sum)
+df2 <- fread("df2_KCNE1_rerun_d0_d8_d20.csv", header=T, stringsAsFactors = F)
+
+df <- full_join(num4,df2)
+df <- df <- separate(df,mutation,c("orig","pos","new"),sep=c(1,-1),convert=T)
+
+scores <- fread("~/Downloads/KCNE1_rerun_combined_time_scores.txt", header=T, stringsAsFactors = F) %>% distinct(.) %>% dplyr::filter(.,mutationType %in% c("synon","missense","nonsense")) %>% mutate(pos=as.numeric(pos))
+
+subAcounts <- aggregate(tot.adj~mutation, data=df1, FUN=sum)
+
+scores$cat =ifelse(scores$mutationType=="nonsense" & scores$pos <56,"earlyns",ifelse(scores$mutationType=="nonsense" & scores$pos >55,"latens",scores$mutationType))
+
+df2 <- scores %>% left_join(.,subAcounts)
+```
+data set for manipulation is scores or df2 (both are the same at this point)
+
+
+### distributions 
+
+```{r}
+
+df_for_melt <- df2[,c(2:13,25)]
+
+x <- melt(df_for_melt,id=c("orig","pos","new"))
+ggplot(x,aes(log(value,10), y = variable,fill=variable))+geom_density_ridges(alpha=0.5)+theme_classic()+
+  scale_fill_discrete(labels =c("Sub-assembly","Day 0","Day 8","Day 20"  ))+xlab("Sequence reads PPM")+ylab("")
+
+x$mutation = ifelse(x$orig == x$new, "syn",ifelse(x$new =="X","nonsense","missense"))
+x$replicate = ifelse(grepl("_A",x$variable),"A",ifelse(grepl("_B",x$variable),"B",
+                                                       ifelse(grepl("_C",x$variable)
+                                                              ,"C","count")
+                                                       )
+                     )
+
+x$variable = factor(x$variable, levels = c("tot.adj","time1_A", "time2_A", "time3_A", "time1_B", "time2_B", "time3_B", "time1_C", "time2_C", "time3_C"))
+ggplot(x[x$variable=="tot.adj",],aes(log(value,10),fill=mutation))+geom_density(alpha=0.5)+theme_classic()+ggtitle("SubA")
+
+ggplot(data= x[x$variable=="time3.adj",],aes(log(value,10),fill=mutation))+ geom_density(alpha=0.5)+theme_classic()+ggtitle("Day20")
+
+ggplot(x,aes(log(value,10), y = variable,fill=mutation))+geom_density_ridges(alpha=0.5, scale =1 )+theme_classic()
+
+p1 <- ggplot(x[x$replicate=="A" | x$replicate=="count"],aes(x=value, y = mutation,fill=variable))+geom_density_ridges(alpha=0.75, scale =1)+theme_ridges()+scale_fill_brewer(direction=-1,name=NULL,labels=c("Subassembly","Day 0","Day 8","Day 20"))+xlab("")+ylab("")+labs(y=NULL)+scale_y_discrete(labels = c("Missense","Nonsense","Synonymous"))+theme(axis.title.x = element_text(hjust=0.5), legend.justification='center',legend.direction='horizontal',axis.text.y=element_text(angle=90,hjust=0,size=8))+scale_x_log10(labels = trans_format("log10", math_format(10^.x)))
+
+#,legend.text = element_text(size=8), legend.key.size = unit(0.4, 'cm'))
+
+p2 <- ggplot(x[x$replicate=="B" | x$replicate=="count"],aes(x=value, y = mutation,fill=variable))+geom_density_ridges(alpha=0.75, scale =1)+theme_ridges()+scale_fill_brewer(direction=-1,name=NULL,labels=c("Subassembly","Day 0","Day 8","Day 20"))+labs(y=NULL)+scale_y_discrete(labels = NULL)+theme(legend.position = "none",axis.title.x = element_text(hjust=0.5), legend.justification='center',legend.direction='horizontal',axis.text.y=element_text(angle=90,hjust=0.5))+scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+xlab("Sequence Reads (PPM)")
+
+
+p3 <- ggplot(x[x$replicate=="C" | x$replicate=="count"],aes(x=value, y = mutation,fill=variable))+geom_density_ridges(alpha=0.75, scale =1)+theme_ridges()+scale_fill_brewer(direction=-1,name=NULL,labels=c("Subassembly","Day 0","Day 8","Day 20"))+xlab("")+ylab("")+labs(y=NULL)+scale_y_discrete(labels = NULL)+theme(legend.position = "none",axis.title.x = element_text(hjust=0.5), legend.justification='center',legend.direction='horizontal',axis.text.y=element_text(angle=90,hjust=0.5))+scale_x_log10(labels = trans_format("log10", math_format(10^.x)))
+  
+combined <- p1+p2+p3 & theme(legend.position = "bottom")
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+
+  ########3
+  #########
+  ##########
+  
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_distribution_fitness.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+dev.off()
+
+```
+# prior to QC showing that there is no depletion in the KCNQ1 trafficking pool but depletion in the SG pool (day 8 of selection)
+```{r}
+b <- fread("~/Desktop/scores-non-norm-allreps-notQC-2023-04-26.txt", header=T, stringsAsFactors = F) %>% dplyr::rename("pos"="pos_corr")
+# B is the raw counts from the trafficking assay, that have not been QC'd 
+# tot_freq is just the sum of the repA_TC, rep2_TC and rep3_TC
+
+b1 <- left_join(b[,c("orig","pos","new","category","repA_TC","rep2_TC","rep3_TC")], df_for_melt[,c("orig","new","pos","time2_A","time2_B","time2_C","tot.adj")])
+
+# tot.adj is from subA and the time2 are day 8 counts
+iter = 
+
+b2 <- b1 %>% group_by(category) %>% dplyr::summarize(across(repA_TC:tot.adj, sum, na.rm =T)) %>% dplyr::mutate_at(vars(repA_TC:tot.adj), funs(./sum(.)))
+
+
+
+b3 <- melt(b2, id="category")
+
+b3$replicate = ifelse(grepl("_TC",b3$variable),"Trafficking",ifelse(grepl("tot",b3$variable),"Subassembly","Fitness (day 8)"))
+
+p1 <- ggplot(b3,aes(as.factor(replicate),value,col=category))+geom_boxplot()+theme_classic()+
+  scale_y_break(c(0.15,0.80))+
+  geom_point(position=position_jitterdodge(0.2), pch=21, col="black",aes(fill=category))+scale_x_discrete(limits=c("Subassembly","Trafficking","Fitness (day 8)"))+
+   scale_color_manual(values=c("#56B4E9","#660000","#006600"))+
+  scale_fill_manual(values=c("#56B4E9","#660000","#006600"))+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")+
+  ylab("Proportion of sequencing reads")+
+  xlab("Sequencing experiment")+
+  geom_hline(yintercept = b3[b3$replicate=="Subassembly" & b3$variable=="tot.adj","value"], lty=2, col="lightgrey")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"depletion_trafVfit.pdf",sep="")
+ggsave(p1, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+# day 0 based QC 
+# QC process 
+```{r}
+
+syn <- df2[df2$mutationType=="synon",]
+missense <- df2[df2$mutationType =="missense",]
+
+df_t <- data.frame(cutoff = double(),synonymous3=double(),
+                 cv3=double(), missense3 = double(), 
+                 mean_syn3=double(), median_syn3=double(),
+                synonymous2= double(), cv2=double(), missense2=double(), 
+                 mean_syn2=double(), 
+                 median_syn2=double(), 
+                 synonymousA = double(), cvA=double(), missenseA=double(),
+                 mean_synA=double(), median_synA=double()
+                )
+totCutoff = seq(0,3,by=0.5)
+# tried till 2000 with a 50 jump each, but realized that the 
+
+
+for (x in totCutoff){
+    #need 3 replicates 
+    a1 <- syn[log(syn$time1_A,10) > x, ]
+    a2 <- syn[log(syn$time1_B,10) > x, ]
+    a3 <- syn[log(syn$time1_C,10) > x, ]
+    
+    m1 <- missense[log(missense$time1_A,10) > x, ]
+    m2 <- missense[log(missense$time1_B,10) > x, ]
+    m3 <- missense[log(missense$time1_C,10) > x, ]
+    
+    ms1 = nrow(m1)
+    ms2 = nrow(m2)
+    ms3 = nrow(m3)
+    
+    cv1 = sd(a1$score3_A, na.rm=T)/mean(a1$score3_A, na.rm=T)
+    cv2 = sd(a2$score3_B, na.rm=T)/mean(a2$score3_B, na.rm=T)
+    cv3 = sd(a3$score3_C, na.rm=T)/mean(a3$score3_C, na.rm=T)
+    
+    # 'cutoff''synonymous3''cv3''missense3''mean_syn3''median_syn3''synonymous2''cv2'
+    # 'missense2''mean_syn2''median_syn2''synonymousA''cvA''missenseA''mean_synA''median_synA'
+    df_t[nrow(df_t)+1,] <- c(x, nrow(a1), 
+                         cv1, ms1, 
+                         mean(a1$score3_A, na.rm=T), median(a1$score3_A, na.rm=T),
+                         nrow(a2),
+                         cv2, ms2,
+                         mean(a2$score3_B, na.rm=T), 
+                         median(a2$score3_B, na.rm=T), 
+                         nrow(a3),
+                         cv3, ms3,
+                         mean(a3$score3_C, na.rm=T), median(a3$score3_C, na.rm=T)
+                        )
+                
+}
+```
+
+# plot QC:
+
+```{r}
+
+cutOff = 1.5
+
+p1 = ggplot(df_t,aes(cutoff, cv3)) + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2)+ggtitle("Replicate 1")+theme(plot.title=element_text(hjust=0.5),axis.title.y = element_text(size = 8, hjust=0.5))+xlab(NULL)+ylab("Coefficient of variation\nof synonymous scores")
+
+p2 = ggplot(df_t,aes(cutoff, mean_syn3)) + geom_point() + geom_line() + geom_point(data=df_t, aes(cutoff,median_syn3),col="red")+geom_line(data=df_t, aes(cutoff,median_syn3),col="red") +geom_vline(xintercept = cutOff, lty=2)+xlab(NULL)+ylab("Synonymous\nvariant scores")+theme(axis.title.y = element_text(size = 8))
+
+p3 = ggplot(df_t,aes(cutoff, missense3)) + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2)+xlab(NULL)+ylab("# of unique\nmissense variants")+theme(axis.title.y = element_text(size = 8))
+
+p4 = ggplot(df_t,aes(cutoff, cv2))  + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2) +ggtitle("Replicate 2")+theme(plot.title = element_text(hjust=0.5))+xlab(NULL)+ylab(NULL)
+
+p5 = ggplot(df_t,aes(cutoff, mean_syn2)) + geom_point() + geom_line() + geom_point(data=df_t, aes(cutoff,median_syn2),col="red",fill="red")+geom_line(data=df_t, aes(cutoff,median_syn2,col="Red")) +geom_line(data=df_t, aes(cutoff,median_syn2),col="Red")+geom_vline(xintercept = cutOff, lty=2)+scale_color_manual(name="Scores",breaks=c("Mean","Median"),values = c("Mean" = "black","Median" = "red"))+xlab(NULL)+ylab(NULL)
+
+p6 = ggplot(df_t,aes(cutoff, missense2)) + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2)+ylab(NULL)+
+  xlab(expression("log"["10"]*"Read Count"))
+
+p7= ggplot(df_t,aes(cutoff, cvA)) + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2)+ggtitle("Replicate 3")+theme(plot.title = element_text(hjust=0.5))+xlab(NULL)+ylab(NULL)
+
+p8 = ggplot(df_t,aes(cutoff, mean_synA)) + geom_point() + geom_line() +geom_point(data=df_t, aes(cutoff,median_synA),col="red")+geom_line(data=df_t, aes(cutoff,median_synA),col="red") +geom_vline(xintercept = 2, lty=2)+xlab(NULL)+ylab(NULL)
+
+p9 = ggplot(df_t,aes(cutoff, missenseA)) + geom_point() + geom_line()+geom_vline(xintercept = cutOff, lty=2)+xlab(NULL)+ylab(NULL)
+
+
+combined <- p1+p4+p7+p2+p5+p8+p3+p6+p9 & theme(legend.position = "right")
+
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_QC_day0_fitness.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=5)
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+dev.off()
+
+```
+The cut off used for distribution is at least 10 reads at time 0. 
+
+# need normalization:
+
+```{r}
+
+qc = 10^1.5
+scores <- df2[(df2$time1_A> qc & df2$time1_B> qc &
+               !is.na(df2$time1_A) & !is.na(df2$time1_B)
+               )
+              | 
+         (df2$time1_A> qc & df2$time1_C> qc &
+               !is.na(df2$time1_A) & !is.na(df2$time1_C)
+         ) 
+              |
+        (df2$time1_B> qc & df2$time1_C> qc &
+               !is.na(df2$time1_B) & !is.na(df2$time1_C)
+              ),]
+
+
+# this ratio does not need to be calculated since the scores scoreX_Y are the scores calculates from the day 0 times count 
+
+############
+############
+############
+############
+#if need to re-do, start here
+############
+############
+############
+############
+scores <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Fitness/2022-12-28-funcscores-day0.txt", header=T, stringsAsFactors = F)
+
+earlyns <- scores[scores$cat=="earlyns",]
+syn <- scores[scores$cat=="synon",]
+
+synMed_A = median(syn$score3_A,na.rm=T)
+synMed_B = median(syn$score3_B,na.rm=T)
+synMed_C = median(syn$score3_C,na.rm = T)
+
+ensMed_A = median(earlyns$score3_A,na.rm = T)
+ensMed_B = median(earlyns$score3_B,na.rm = T)
+ensMed_C = median(earlyns$score3_C,na.rm = T)
+
+scores$norm.ou_A = (scores$score3_A - ensMed_A)/(synMed_A - ensMed_A)
+scores$norm.ou_B = (scores$score3_B - ensMed_B)/(synMed_B - ensMed_B)
+scores$norm.ou_C = (scores$score3_C - ensMed_C)/(synMed_C - ensMed_C)
+
+scores$trans_av = rowMeans(scores[,c(26:28)], na.rm=T)
+scores$sd_av = apply(scores[,c(26:28)],1,sd, na.rm=T)
+scores$notNA = rowSums(!is.na(scores[,c(26:28)]))
+scores$sem = scores$sd_av/(scores$notNA^0.5)
+```
+
+# histograms 
+
+```{r}
+
+p <- ggplot(scores,aes(cat,trans_av))
+
+
+q <- p + geom_violin(aes(fill=cat),scale="width",alpha=0.65)+theme_classic2()+geom_dotplot(binaxis = "y", stackdir = "center",binwidth = 0.01) + 
+     geom_boxplot(width=00.05,outlier.shape = NA) + scale_fill_manual(labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"),
+                                                  values=c("#660000", "#DD4444", "#56B4E9","#006600"),name=NULL)+
+  geom_hline(yintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] + 
+              1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2, lwd=0.5) +
+    geom_hline(yintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] - 
+              1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2,lwd=0.5) + 
+    labs(x=NULL, y="Average Normalized Score", title=NULL) + 
+    theme(plot.title = element_text(hjust = 0.5), legend.position = "none") + scale_x_discrete(labels=c("Early nonsense", "Late nonsense", "Missense", "Synonymous"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_distribution_day0_fitness.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+q
+dev.off()
+
+```
+
+#the cut off for tail is 104, as determined here 
+
+```{r}
+traf <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/scores-allreps-norm-2023-02-19.txt", header=T, stringsAsFactors = F) %>% 
+  dplyr::rename("pos"="pos_corr", "mutation"="variants","trans_av_traf"="trans_av","sd_av_traf"="sd_av","sem_traf"="sem", "cat_traf"="cat_ns")
+
+p <- ggpairs(traf,
+      columns = c("trans_repA","trans_rep2","trans_rep3"), columnLabels = c("Replicate 1","Replicate 2","Replicate 3"),
+       mapping = aes(color=cat_traf, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"), labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  scale_fill_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"),labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  labs(x="Trafficking scores (normalized KCNQ1+)",
+       y="Trafficking scores (normalized KCNQ1+)"
+       )+
+  theme(text=element_text(family="Myriad Pro"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_traff_replicates_earlyvLate.pdf",sep="")
+ggsave(p, filename = pdfName, height= 6, width =6,device = cairo_pdf, units = "in")
+
+
+traf_lit = data.frame("mutation" = c("T6F", "S74L", "D76A", "D76N", "Y81C", "W87R", "R98W", "G52R", "L51H"),
+                      "lit_class"=c(100,100,80,83,100,100,100,100,0))
+
+traf_lit$normal = ifelse(traf_lit$lit_class==0,"abnormal","normal")
+
+df_s <- traf[traf$cat_traf =="synonymous",]
+to1 = mean(df_s$trans_av_traf)-3*sd(df_s$trans_av_traf)
+to2 = mean(df_s$trans_av_traf)+3*sd(df_s$trans_av_traf)
+
+traf_core <- left_join(traf_lit, traf) 
+
+test <- ggplot(traf_core,aes(normal,trans_av_traf))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_point(position=position_jitter(width=0.1),size=2.5)+
+  theme_classic2()+
+  xlab("")+
+  ylab("Trafficking Score")+
+  geom_hline(yintercept=c(to1,to2),col="black", lty=2)+
+  theme(legend.position = "top", text= element_text(family="Myriad Pro"))+
+  annotate("text",
+           x = 1:(length(table(traf_core$normal))),
+           y = 1.3,
+           label = paste("n=",table(traf_core$normal)),
+           col = "black",
+           vjust = - 1,
+           family="Myriad Pro")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"trafficking_scoreVLit.pdf",sep="")
+ggsave(test, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+
+
+# D76N has two different 
+```
+
+
+```{r}
+ggplot(df2[df2$mutationType=="nonsense"],aes(pos,score3_A))+geom_point()+geom_vline(xintercept = 104)+geom_point(aes(pos,score3_B),col="red")+geom_point(aes(pos,score3_C),col="blue")+theme_bw()
+
+ggplot(traf[traf$cat_traf %in% c("earlyNS","lateNS")],aes(pos,trans_repA))+geom_point()+geom_vline(xintercept = c(56:59))+geom_point(aes(pos,trans_rep2),col="red")+geom_point(aes(pos,trans_rep3),col="blue")+theme_bw()
+# blue is replicate 3 
+# red is replicate 2
+# black is replicate 1
+```
+
+# heatmap code
+
+```{r}
+heatmap_matrix = matrix(ncol=21,nrow=129)
+colnames(heatmap_matrix)= c("G","A","V","L","M","I","F","Y","W","S","T","C","P","N","Q","K","R","H",
+                 "D","E","X")
+ 
+ for (i in c(1:128)){
+    for (x1 in (1:21)){
+      a = colnames(heatmap_matrix)[x1]
+      scoreAA <- unlist(scores[scores$pos==i & scores$new==a, 29])
+      if(length(scoreAA)==0)
+          {
+          scoreAA = NA
+      }
+      #print(paste(i,a,scoreAA,sep=" "))
+      #print(scores[scores$pos==i & scores$aa2==a, 28])
+      #print(heatmap_matrix[i,x1])
+      heatmap_matrix[i,x1] <- as.numeric(scoreAA)
+      
+    }
+ }
+
+labs=matrix(nrow=129,,ncol=21)
+colnames(labs)= c("G","A","V","L","M","I","F","Y","W","S","T","C","P","N","Q","K","R","H",
+                 "D","E","X")
+
+
+KCNE1 = "MILSNTTAVTPFLTKLWQETVQQGGNMSGLARRSPRSGDGKLEALYVLMVLGFFGFFTLGIMLSYIRSKKLEHSNDPFNVYIESDAWQEKDKAYVQARVLESYRSCYVVENHLAIEQPNTHLPETKPSP"
+
+KCNE1 = unlist(strsplit(KCNE1,""))
+for (i in 1:(length(KCNE1)-1)){
+    for (x1 in (1:21)){
+      a = colnames(heatmap_matrix)[x1]
+        if (KCNE1[i] == a){
+             labs[i,x1] = "."    
+        }
+   }
+}
+```
+
+# actual heatmap
+
+```{r}
+my_palette <- colorRampPalette(c("red","white","blue"))(n=100)
+
+mx = max(scores$trans_av, na.rm = T) #1.151683
+mn = min(scores$trans_av, na.rm = T) #-0.1079353
+clrrng = (mx +mn) # 1.043748
+extra = (mx-1)/clrrng #0.1453258
+upperlimit=round((extra*50)+50,0) #57
+my_palette = my_palette[1:upperlimit]
+
+
+heatmap.2(heatmap_matrix, Rowv=NA, Colv=NA, 
+        scale="none",
+         sepcolor="black",
+          sepwidth=c(0.5,0.5),
+          trace="none", dendrogram = c("none"),
+        srtCol=0, adjCol = c(0.5,1), na.color = "grey", col = my_palette,          
+          cellnote=labs, notecol="black", symkey=F, symm=F, symbreaks=F)
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/Figure4/Fitness_allreps_day0today20-",Sys.Date(),".pdf",sep="")
+pdf(pdfName, useDingbats = F)
+heatmap.2(heatmap_matrix, Rowv=NA, Colv=NA, 
+        scale="none",
+         sepcolor="black",
+          sepwidth=c(0.5,0.5),
+          trace="none", dendrogram = c("none"),
+        srtCol=0, adjCol = c(0.5,1), na.color = "grey", col = my_palette,          
+          cellnote=labs, notecol="black", symkey=F, symm=F, symbreaks=F)
+dev.off()
+
+# writing the scores with day0 
+fileName = paste(Sys.Date(),"funcscores-day0.txt",sep="-")
+fwrite(scores,fileName,row.names = F, quote = F, sep="\t")
+```
+
+# umap dimension reduction 
+```{r}
+heatmap.umap.labels <- fread("../Figures/AlphaFold2-KCNE1-dssp.txt", header=F, stringsAsFactors = F, sep=" ")
+
+heatmap_matrix_comp <- na.omit(cbind(heatmap_matrix, heatmap.umap.labels$V3))
+heatmap.labels <- heatmap_matrix_comp[,22]
+
+### TO BE COMPLETED ####
+########################
+########################
+heatmap.umap <- umap(as.numeric(heatmap_matrix_comp[,c(1:21)]))
+
+plot.iris <- function(x, labels,
+         main="A UMAP visualization of the Iris dataset",
+         colors=c("#ff7f00", "#e377c2", "#17becf"),
+         pad=0.1, cex=0.6, pch=19, add=FALSE, legend.suffix="",
+         cex.main=1, cex.legend=0.85) {
+
+  layout <- x
+  if (is(x, "umap")) {
+    layout <- x$layout
+  }
+
+  xylim <- range(layout)
+  xylim <- xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
+  if (!add) {
+    par(mar=c(0.2,0.7,1.2,0.7), ps=10)
+    plot(xylim, xylim, type="n", axes=F, frame=F)
+    rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)
+  }
+  points(layout[,1], layout[,2], col=colors[as.integer(labels)],
+         cex=cex, pch=pch)
+  mtext(side=3, main, cex=cex.main)
+
+  labels.u <- unique(labels)
+  legend.pos <- "topleft"
+  legend.text <- as.character(labels.u)
+  if (add) {
+    legend.pos <- "bottomleft"
+    legend.text <- paste(as.character(labels.u), legend.suffix)
+  }
+
+  legend(legend.pos, legend=legend.text, inset=0.03,
+         col=colors[as.integer(labels.u)],
+         bty="n", pch=pch, cex=cex.legend)
+}
+
+
+
+```
+
+# correlation between different plots
+
+```{r}
+ggpairs(scores,
+      columns = c("norm.ou_A","norm.ou_B","norm.ou_C"), columnLabels = c("Replicate 1","Replicate 2","Replicate 3"),
+       mapping = aes(color=mutationType, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#56B4E9","#660000","#006600"), labels=c("Missense","Nonsense","Synonymous"))+
+  scale_fill_manual(values=c("#56B4E9","#660000","#006600"),labels=c("Missense","Nonsense","Synonymous"))+xlab("Fitness scores (normalized)")+ylab("Fitness scores (normalized)")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_fitnes_day0_corr_replicates.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+ggpairs(scores,
+      columns = c("norm.ou_A","norm.ou_B","norm.ou_C"), columnLabels = c("Replicate 1","Replicate 2","Replicate 3"),
+       mapping = aes(color=mutationType, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#56B4E9","#660000","#006600"), labels=c("Missense","Nonsense","Synonymous"))+
+  scale_fill_manual(values=c("#56B4E9","#660000","#006600"),labels=c("Missense","Nonsense","Synonymous"))+xlab("Fitness scores (normalized)")+ylab("Fitness scores (normalized)")
+
+dev.off()
+
+
+ggpairs(scores,
+      columns = c("norm.ou_A","norm.ou_B","norm.ou_C"), columnLabels = c("Replicate 1","Replicate 2","Replicate 3"),
+       mapping = aes(color=cat, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"), labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  scale_fill_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"),labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_fitnes_day0_corr_replicates_earlyVlate.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+ggpairs(scores,
+      columns = c("norm.ou_A","norm.ou_B","norm.ou_C"), columnLabels = c("Replicate 1","Replicate 2","Replicate 3"),
+       mapping = aes(color=cat, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"), labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  scale_fill_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"),labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))
+dev.off()
+
+```
+
+# redoing the QC and the heatmap with subA counts, as opposed to day 20 counts 
+
+```{r}
+
+syn <- df2[df2$mutationType=="synon",]
+missense <- df2[df2$mutationType =="missense",]
+
+# adjust the count variable
+
+df <- data.frame(cutoff = double(),synonymous3=double(),
+                 cv3=double(), missense3 = double(), 
+                 mean_syn3=double(), median_syn3=double(),
+                synonymous2= double(), cv2=double(), missense2=double(), 
+                 mean_syn2=double(), 
+                 median_syn2=double(), 
+                 synonymousA = double(), cvA=double(), missenseA=double(),
+                 mean_synA=double(), median_synA=double()
+                )
+totCutoff = seq(0,3.5,by=0.5)
+# just as a headsup, the count 
+
+
+for (x in totCutoff){
+    #need 3 replicates 
+    a1 <- syn[log(syn$tot.adj,10) > x, ]
+    a2 <- syn[log(syn$tot.adj,10) > x, ]
+    a3 <- syn[log(syn$tot.adj,10) > x, ]
+    
+    m1 <- missense[log(missense$tot.adj,10) > x, ]
+    m2 <- missense[log(missense$tot.adj,10) > x, ]
+    m3 <- missense[log(missense$tot.adj,10) > x, ]
+    
+    ms1 = nrow(m1)
+    ms2 = nrow(m2)
+    ms3 = nrow(m3)
+    
+    cv1 = sd(a1$score3_A, na.rm=T)/mean(a1$score3_A, na.rm=T)
+    cv2 = sd(a2$score3_B, na.rm=T)/mean(a2$score3_B, na.rm=T)
+    cv3 = sd(a3$score3_C, na.rm=T)/mean(a3$score3_C, na.rm=T)
+    
+    # 'cutoff''synonymous3''cv3''missense3''mean_syn3''median_syn3''synonymous2''cv2'
+    # 'missense2''mean_syn2''median_syn2''synonymousA''cvA''missenseA''mean_synA''median_synA'
+    df[nrow(df)+1,] <- c(x, nrow(a1), 
+                         cv1, ms1, 
+                         mean(a1$score3_A, na.rm=T), median(a1$score3_A, na.rm=T),
+                         nrow(a2),
+                         cv2, ms2,
+                         mean(a2$score3_B, na.rm=T), 
+                         median(a2$score3_B, na.rm=T), 
+                         nrow(a3),
+                         cv3, ms3,
+                         mean(a3$score3_C, na.rm=T), median(a3$score3_C, na.rm=T)
+                        )
+                
+}
+
+# plot QC
+
+
+
+p1 = ggplot(df,aes(cutoff, cv3)) + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2)+ggtitle("Replicate 1")+theme(plot.title=element_text(hjust=0.5),axis.title.y = element_text(size = 8, hjust=0.5))+xlab(NULL)+ylab("Coefficient of variation\nof synonymous scores")
+
+p2 = ggplot(df,aes(cutoff, mean_syn3)) + geom_point() + geom_line() + geom_point(data=df, aes(cutoff,median_syn3),col="red")+geom_line(data=df, aes(cutoff,median_syn3),col="red") +geom_vline(xintercept = 2, lty=2)+xlab(NULL)+ylab("Synonymous\nvariant scores")+theme(axis.title.y = element_text(size = 8))
+
+p3 = ggplot(df,aes(cutoff, missense3)) + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2)+xlab(NULL)+ylab("# of unique\nmissense variants")+theme(axis.title.y = element_text(size = 8))
+
+p4 = ggplot(df,aes(cutoff, cv2))  + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2) +ggtitle("Replicate 2")+theme(plot.title = element_text(hjust=0.5))+xlab(NULL)+ylab(NULL)
+
+p5 = ggplot(df ,aes(cutoff, mean_syn2)) + geom_point() + geom_line() + geom_point(data=df, aes(cutoff,median_syn2),col="red",fill="red")+geom_line(data=df, aes(cutoff,median_syn2,col="Red")) +geom_line(data=df, aes(cutoff,median_syn2),col="Red")+geom_vline(xintercept = 2, lty=2)+scale_color_manual(name="Scores",breaks=c("Mean","Median"),values = c("Mean" = "black","Median" = "red"))+xlab(NULL)+ylab(NULL)
+
+p6 = ggplot(df,aes(cutoff, missense2)) + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2)+ylab(NULL)+xlab(expression("log"["10"]*"Read Count"))
+
+p7= ggplot(df,aes(cutoff, cvA)) + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2)+ggtitle("Replicate 3")+theme(plot.title = element_text(hjust=0.5))+xlab(NULL)+ylab(NULL)
+
+p8 = ggplot(df,aes(cutoff, mean_synA)) + geom_point() + geom_line() +geom_point(data=df, aes(cutoff,median_synA),col="red")+geom_line(data=df, aes(cutoff,median_synA),col="red") +geom_vline(xintercept = 2, lty=2)+xlab(NULL)+ylab(NULL)
+
+p9 = ggplot(df,aes(cutoff, missenseA)) + geom_point() + geom_line()+geom_vline(xintercept = 2, lty=2)+xlab(NULL)+ylab(NULL)
+
+
+combined <- p1+p4+p7+p2+p5+p8+p3+p6+p9 & theme(legend.position = "right")
+
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_QC_tot.adj_fitness.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=5, height=6)
+combined + plot_layout(guides = "collect") + plot_annotation(tag_levels = 'A')
+dev.off()
+
+```
+the QC cutodf for subA is also 1.5 
+
+```{r}
+qc = 10^1.5
+scores_SA <- df2[df2$tot.adj>1.5,]
+
+scores_SA$score.A.total = log((scores_SA$time3_A+10)/(scores_SA$tot.adj+10),2)
+
+scores_SA$score.B.total = log((scores_SA$time3_B+10)/(scores_SA$tot.adj+10),2)
+
+scores_SA$score.C.total = log((scores_SA$time3_C+10)/(scores_SA$tot.adj+10),2)
+
+# Remember that scores scoreX_Y is calculated from day 0 already 
+
+earlyns <- scores_SA[scores_SA$cat=="earlyns",]
+syn <- scores_SA[scores_SA$cat=="synon",]
+
+# there seem to be 70 variants that have counts in score2, but not in scoreA (gof?)
+synMed_A = median(syn$score.A.total,na.rm=T)
+synMed_B = median(syn$score.B.total,na.rm=T)
+synMed_C = median(syn$score.C.total,na.rm = T)
+
+ensMed_A = median(earlyns$score.A.total,na.rm = T)
+ensMed_B = median(earlyns$score.B.total,na.rm = T)
+ensMed_C = median(earlyns$score.C.total,na.rm = T)
+
+scores_SA$norm.ou_A = (scores_SA$score.A.total - ensMed_A)/(synMed_A - ensMed_A)
+scores_SA$norm.ou_B = (scores_SA$score.B.total - ensMed_B)/(synMed_B - ensMed_B)
+scores_SA$norm.ou_C = (scores_SA$score.C.total - ensMed_C)/(synMed_C - ensMed_C)
+
+scores_SA$trans_av = rowMeans(scores_SA[,c(29:31)], na.rm=T)
+scores_SA$sd_av = apply(scores_SA[,c(29:31)],1,sd, na.rm=T)
+scores_SA$notNA = rowSums(!is.na(scores_SA[,c(29:31)]))
+scores_SA$sem = scores_SA$sd_av/(scores_SA$notNA^0.5)
+```
+
+# of note, the QC from subA leavevs 2591, whereas the QC from day 0 leaves 2539 good variant scores (still 93% so good enough for me) 
+
+```{r}
+# distribution for scores (histogram)
+
+p <- ggplot(scores_SA,aes(cat,trans_av))
+
+# violin plots for the histogram 
+
+q <- p + 
+    geom_violin(aes(fill=cat),alpha=0.65,trim=T,scale="width")+theme_classic2()+
+  geom_dotplot(binaxis = "y", stackdir = "center",binwidth = 0.01) + coord_flip()+
+     geom_boxplot(width=0.5,outlier.shape = NA) + 
+  scale_fill_manual(labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"),
+                                                  values=c("#660000", "#DD4444", "#56B4E9","#006600"),name=NULL)+
+  geom_hline(yintercept = tapply(scores_SA$trans_av, scores_SA$cat =="synon", mean, na.rm=T)[2] + 
+              1.96* tapply(scores_SA$trans_av, scores_SA$cat =="synon", sd, na.rm=T)[2], lty=2, lwd=0.5) +
+    geom_hline(yintercept = tapply(scores_SA$trans_av, scores_SA$cat =="synon", mean, na.rm=T)[2] - 
+              1.96* tapply(scores_SA$trans_av, scores_SA$cat =="synon", sd, na.rm=T)[2], lty=2,lwd=0.5) + 
+    labs(x=NULL, y="Average Normalized Score", title=NULL) + 
+    theme(plot.title = element_text(hjust = 0.5), legend.position = "none") + scale_x_discrete(labels=c("Early nonsense", "Late nonsense", "Missense", "Synonymous"))
+
+q
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_distribution_tot.adj_fitness.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+q
+dev.off()
+```
+
+# Correlation between scores of SubA versus scores of day 0
+```{r}
+
+core <- scores_SA[,c(1:4,14,24,32)] %>% left_join(.,scores[,c(1:4,14,24,29)],by=c("orig","new","pos","cat","mutationType"))
+
+ggpairs(core,
+      columns = c("trans_av.x","trans_av.y"), columnLabels = c("Normalized to subassembly counts","Normalized to Day 0 counts"),
+       mapping = aes(color=cat, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"), labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  scale_fill_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"),labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_fitnes_day0toSubA_corr_earlyvLate.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+ggpairs(core,
+      columns = c("trans_av.x","trans_av.y"), columnLabels = c("Normalized to subassembly counts","Normalized to Day 0 counts"),
+       mapping = aes(color=cat, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"), labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))+
+  scale_fill_manual(values=c("#660000", "#DD4444", "#56B4E9","#006600"),labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"))
+dev.off()
+
+ggpairs(core,
+      columns = c("trans_av.x","trans_av.y"), columnLabels = c("Normalized to subassembly counts","Normalized to Day 0 counts"),
+       mapping = aes(color=mutationType, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#56B4E9","#660000","#006600"), labels=c("Missense","Nonsense","Synonymous"))+
+  scale_fill_manual(values=c("#56B4E9","#660000","#006600"),labels=c("Missense","Nonsense","Synonymous"))+xlab("Fitness scores (normalized)")+ylab("Fitness scores (normalized)")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"_fitnes_day0toSubA_corr_.pdf",sep="")
+pdf(pdfName,useDingbats = F,width=6, height=4)
+ggpairs(core,
+      columns = c("trans_av.x","trans_av.y"), columnLabels = c("Normalized to subassembly counts","Normalized to Day 0 counts"),
+       mapping = aes(color=mutationType, alpha =0.5), upper = list(continuous = wrap("cor", method = "spearman")))+
+          theme_bw()+scale_color_manual(values=c("#56B4E9","#660000","#006600"), labels=c("Missense","Nonsense","Synonymous"))+
+  scale_fill_manual(values=c("#56B4E9","#660000","#006600"),labels=c("Missense","Nonsense","Synonymous"))+xlab("Fitness scores (normalized)")+ylab("Fitness scores (normalized)")
+dev.off()
+
+```
+
+# trends of different mutations over time 
+
+```{r}
+mutx = c("A114A","L51H","P127T","D76N")
+###xx <- melt(scores[mutation %in% mutx,c(1:4,24,15:17)],id=c("orig","pos","new","mutation","cat"))
+xx <- melt(scores[,c(1,24,15:17)],id=c("mutation","cat"))
+
+xx$variable = ifelse(grepl("score1",xx$variable),1,ifelse(grepl("score2",xx$variable),2,3))
+
+ggplot(xx[xx$cat=="synon"],aes(variable,value,fill=mutation))+geom_point()+geom_line()+theme_bw()+theme(legend.position = "NONE")
+
+#+scale_y_log10(labels = trans_format("log10", math_format(10^.x)))
+
+# identities of synonymous variants that are "LoF" (i.e. props don't decrease over time to try to troubleshoot)
+
+xx[xx$cat=="synon" & xx$variable==3 & xx$value > -0,1]
+# identities: 
+
+outlier <- c("A8A","I61I","I66I", "L13L", "S68S","T10T") 
+
+# how many barcodes for each 
+
+
+bc <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/barcodeTable_annotatedStrict.txt", header=T, stringsAsFactors = F) %>% separate(mut, sep="_", c(NA,"variant")) %>% mutate(barcode = substr(barcode,6,26))
+
+numbc <- aggregate(barcode~variant,bc,length)
+
+outlier_bc <- data.frame("mutation" =as.character(), bc=as.numeric())
+for (i in 1:length(outlier)){
+  print(outlier[i])
+  outlier_bc[nrow(outlier_bc)+1,] <-numbc[which(grepl(outlier[i],numbc$variant)),]
+}
+outlier_bc %>% left_join(.,scores[,c(1,26:30)],by="mutation")
+
+# looking in detail at I61I (78 bc) and T10T (7bc)
+invest <- bc[bc$variant %in% outlier, c(1,6)] %>% left_join(.,df1[,c(1,11,13,15,17)]) %>% mutate(score_A1 = log(PrevalancePerMilA1/PrevalancePerMilA1,2), score_A2 = log(PrevalancePerMilA2/PrevalancePerMilA1,2), score_A3 = log(PrevalancePerMilA3/PrevalancePerMilA1,2), score_tot = log(tot.adj/PrevalancePerMilA1,2))
+
+
+x_invest <- melt(invest[,c(1:2,7:10)],id=c("barcode","variant"))
+
+x_invest$variable = ifelse(grepl("A1",x_invest$variable),1,ifelse(grepl("A2",x_invest$variable),2,
+                                                       ifelse(grepl("A3",x_invest$variable)
+                                                              ,3,0)))
+                                                       
+ggplot(x_invest,aes(variable,value,fill=barcode))+geom_point() +geom_line()+theme_bw()+theme(legend.position = "NONE")+labs(title="Bad Synon")
+
+
+ggplot(x_invest[x_invest$variant=="S68S"],aes(variable,value,fill=barcode))+geom_point() +geom_line()+theme_bw()+
+  theme(legend.position = "NONE")+labs(title="S68S")
+
+
+#+scale_y_log10(labels = trans_format("log10", math_format(10^.x)))
+
+```
+
+```{r}
+# by barcode for "normal" synon 
+
+syno <- unlist(syn$mutation)
+
+invest_s <- bc[bc$variant %in% syno & bc$variant %ni% outlier, c(1,6)] %>% left_join(.,df1[,c(1,11,13,15,17)]) %>% mutate(score_A1 = log(PrevalancePerMilA1/PrevalancePerMilA1,2), score_A2 = log(PrevalancePerMilA2/PrevalancePerMilA1,2), score_A3 = log(PrevalancePerMilA3/PrevalancePerMilA1,2), score_tot = log(tot.adj/PrevalancePerMilA1,2))
+
+x_invest_s <- melt(invest_s[,c(1:2,7:10)],id=c("barcode","variant"))
+
+x_invest_s$variable = ifelse(grepl("A1",x_invest_s$variable),1,ifelse(grepl("A2",x_invest_s$variable),2,
+                                                       ifelse(grepl("A3",x_invest_s$variable)
+                                                              ,3,0)))
+
+ggplot(x_invest_s[x_invest_s$variant=="G25G"],aes(variable,value,fill=barcode))+geom_point() +geom_line()+
+  theme_bw()+theme(legend.position = "NONE")+ labs(title="G25G")
+```
+
+# panel for number of variants scored in trafficking assay 
+
+```{r}
+mut <- scores[,c(1:4)]
+mutCount = data.frame("pos"=integer(),"numMut" =integer())
+  for (i in 1:129){
+    uniqMuts = unique(mut[mut$pos==i,3])
+    numMuts = nrow(unique(mut[mut$pos==i,4]))
+    mutCount[nrow(mutCount)+1,] <- c(i,numMuts)
+  }
+
+ggplot(data=mutCount, aes(x=pos, y=numMut)) +
+  geom_histogram(stat="identity", fill="#50BE9B")+theme_classic()+
+  labs(x ="Position in KCNE1", y = "Number of Unique Mutations")
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/Figure4/",Sys.Date(),"unique_postQC.pdf",sep="")
+pdf(pdfName,useDingbats = F)
+ggplot(data=mutCount, aes(x=pos, y=numMut)) +
+  geom_histogram(stat="identity", fill="#50BE9B")+theme_classic()+
+  labs(x ="Position in KCNE1", y = "Number of Unique Mutations")
+
+dev.off()
+
+```
+
+# calculating loss of function per position 
+
+```{r}
+syn = scores[scores$mutationType=="synon",]
+ggplot(syn, aes(trans_av))+geom_histogram(bins=100)
+
+m1 = mean(syn$trans_av)
+sd1 = sd(syn$trans_av)
+
+co1 = m1 - 3*sd1
+co2 = m1 + 3*sd1
+
+co3 = m1 - 1.96*sd1
+co4 = m1 + 1.96*sd1
+
+# ns distribution wilcoxon test 
+ns_f = scores[scores$mutationType=="nonsense",]
+ns_f$pos_cutoff = ifelse(ns_f$pos<105,0,1)
+x1 <- unlist(ns_f[ns_f$pos_cutoff==0,"trans_av"])
+x2 <- unlist(ns_f[ns_f$pos_cutoff==1,"trans_av"])
+wilcox.test(x2,x1)
+
+# finding the two modes of the bimodal missense distribution 
+library(multimode)
+locmodes(unlist(scores[scores$cat=="missense","trans_av"]),mod0=2,display=TRUE)
+
+locmodes(unlist(traf[traf$cat_traf %in% c("earlyNS","lateNS"), "trans_av_traf"]),mod0=2,display=TRUE)
+
+
+scores$functionality = ifelse(scores$trans_av < co1, "LoF", ifelse(scores$trans_av > co2, "GoF","neutral"))
+
+data_e1 <- scores[scores$mutationType=="missense",] %>%
+  group_by(functionality,pos) %>% dplyr::summarise(count = n())
+
+data_e1$count = ifelse(data_e1$functionality=="LoF",data_e1$count *-1, data_e1$count)
+
+test_e1 = data.frame(pos=numeric(),totB=numeric())
+for (i in 1:129){
+  a <- scores[scores$pos==i & scores$mutationType=="missense",] 
+  totB = nrow(a)
+  if(i==116){
+    print(a)
+  }
+  test_e1[nrow(test_e1)+1,] <- c(i,totB)
+}
+data_e1 <- data_e1 %>% left_join(.,test_e1, by="pos")
+
+data_e1$prop = data_e1$count/data_e1$totB
+
+ggplot(data_e1[data_e1$functionality!="neutral",],aes(pos,prop))+geom_histogram(stat="identity",position="identity", fill="red")+theme_classic()
+
+q1_contacts <- fread("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/E1-residue-contacting-Q1.csv", header=F, stringsAsFactors = F) 
+
+calm_contacts <- fread("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/E1-residue-contacting-CalM.csv", header=F, stringsAsFactors = F)
+
+del_residues <- unique(data_e1[which(data_e1$prop < -0.7 & data_e1$pos !=1),"pos"])
+
+nrow(del_residues) #30
+length(which(del_residues$pos %in% q1_contacts$V1)) #14
+length(which(del_residues$pos %in% calm_contacts$V1)) #9
+length(which(q1_contacts$V1 %in% calm_contacts$V1)) #1. overlap so remove 1 from the "close contact" category 
+
+nl_residues <- unique(data_e1[which(data_e1$prop > 0.5 & data_e1$pos !=1),"pos"])
+length(which(nl_residues %in% calm_contacts))
+length(which(nl_residues %in% q1_contacts))
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/Figure4/",Sys.Date(),"prop_LoF_GoF.pdf",sep="")
+pdf(pdfName,useDingbats = F)
+ggplot(data_e1[data_e1$functionality!="neutral",],aes(pos,prop))+geom_histogram(stat="identity",position="identity", fill="red")+theme_classic()
+
+dev.off()
+```
+
+```{r}
+# correlation with trafficking scores 
+
+traf <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/scores-allreps-norm-2023-02-19.txt", header=T, stringsAsFactors = F) %>% dplyr::rename("pos"="pos_corr", "mutation"="variants", "trans_av_traf"="trans_av","sd_av_traf"="sd_av","sem_traf"="sem", "cat_traf"="cat_ns")
+
+core2 <- full_join(traf,scores[,c(1:4,24,26:30,32)])
+
+core2$traf_abs = abs( 1- core2$trans_av_traf)
+
+ggplot(core2[core2$cat=="synon"],aes(trans_av,trans_av_traf))+geom_point()+geom_smooth(formula = "y~x")+theme_bw()
+
+synon <- core2[core2$cat=="synon"]
+
+to1 = mean(synon$trans_av_traf)-3*sd(synon$trans_av_traf)
+to2 = mean(synon$trans_av_traf)+3*sd(synon$trans_av_traf)
+
+to3 = mean(synon$trans_av_traf)-1.96*sd(synon$trans_av_traf)
+to4 = mean(synon$trans_av_traf)+1.96*sd(synon$trans_av_traf)
+
+# calculating CI (which is mean +/- 1.96SEM)
+core2$CI_lower_traf = core2$trans_av_traf - 1.96*core2$sem_traf
+core2$CI_upper_traf = core2$trans_av_traf + 1.96*core2$sem_traf
+
+core2$CI_lower = core2$trans_av - 1.96*core2$sem
+core2$CI_upper = core2$trans_av + 1.96*core2$sem
+
+# definitive loss of trafficking + function variants 
+# need the upper CI to be lower than cut off 
+length(which(core2$cat =="missense" & core2$CI_upper_traf < to3 & core2$CI_upper <co3)) #155
+
+# loss of function but nl trafficking variants 
+# need the upper CI for function to be lower than co3, for trafficking, need the lower CI to be greater than to3 
+length(which(core2$cat =="missense" & core2$CI_lower_traf>to3 & core2$CI_upper <co3)) # 351 
+
+# loss of trafficking variants 
+length(which(core2$cat =="missense" & core2$CI_upper_traf<to3)) # 470/2339
+# gain of trafficking variants 
+length(which(core2$cat =="missense" & core2$CI_lower_traf>to4)) # 311/2339
+
+# loss of function variants
+length(which(core2$cat =="missense" & core2$CI_upper<co3)) #588/2320
+
+# plot for nonsense variant correlations 
+# this plot makes the point that there are functionally dead variants that are trafficking normally 
+core2$tail = ifelse(core2$pos<56, "0", ifelse(core2$pos<105,"1","2"))
+core2$tail2 = ifelse(core2$pos<56, "0", ifelse(core2$pos<105,"1","2"))
+
+p <- ggscatter(core2[core2$cat=="latens" | core2$cat=="earlyns"], y="trans_av",x="trans_av_traf", color="tail2",
+          add = NULL, conf.int = FALSE, fullrange = TRUE, 
+          #cor.coef = TRUE, cor.method = "spearman",
+          ylab = "Functional Score", xlab = "Trafficking Score", #facet.by = "cat",
+          ) +scale_color_manual(name="Position", values=c("#660000", "#DD4444","#FF9999"),labels=c("1-55","56-104",expression("">="105")))+scale_shape_manual(name="Position", values=NULL)+
+  theme(legend.position = "top", text = element_text(family="Myriad Pro"),legend.text= element_text(size=15),legend.spacing.x = unit(0.1, 'cm'))+geom_hline(yintercept = c(co3,co4), lty=2)+geom_vline(xintercept = c(to3,to4), lty=2)+ 
+  annotate( "text", label = "WT-like", y = 1.55, hjust=0.5, x = 1, size = 5, family="Myriad Pro")+
+  annotate( "text", label = "Trafficking Defect",y = -0.25, hjust=0.5, x = 0.25, size = 5, family="Myriad Pro")+
+  annotate( "text", label = "Gating Defect",  y = -0.25, hjust=0.5, x = 1.5, size = 5, family="Myriad Pro")+
+  geom_errorbar(aes(ymin=CI_lower, ymax=CI_upper,col=tail),alpha=0.5,)+
+ geom_errorbarh(aes(xmin=CI_lower_traf, xmax=CI_upper_traf,col=tail), alpha=0.5)#+
+  #ggrepel::geom_text_repel(aes(label=pos),family="Myriad Pro")
+
+ p
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"nonsense_correlation.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+
+noq1 <- fread("../KCNE1_only_end_file_post_QC.txt", header=T, stringsAsFactors = F) %>% dplyr::select(mutation,mutationType, orig,pos,new, trans_av, sd_av, sem) %>% 
+  dplyr::rename("trans_av_e1"="trans_av", "sd_av_e1"="sd_av","sem_e1"="sem")
+
+noq1_core <- full_join(noq1,core2)
+
+syno2 <- noq1_core[noq1_core$cat =="synon"]
+to1_e1 = mean(syno2$trans_av_e1)-3*sd(syno2$trans_av_e1)
+to2_e1 = mean(syno2$trans_av_e1)+3*sd(syno2$trans_av_e1)
+
+to3_e1 = mean(syno2$trans_av_e1)-1.96*sd(syno2$trans_av_e1)
+to4_e1 = mean(syno2$trans_av_e1)+1.96*sd(syno2$trans_av_e1)
+
+p <- ggscatter(core2[core2$cat =="missense"],x="trans_av_traf",y="trans_av", add="reg.line",font.family = "Myriad Pro", xlab="Trafficking Score (+KCNQ1)",ylab="Function Score",col="lightgrey",alpha=0.7)+
+  #scale_colour_steps(n.breaks=6,low = "pink",high = "red")+
+  stat_cor()+
+  geom_vline(xintercept = c(to3,to4), lty=2)+
+  geom_hline(yintercept = c(co3,co4),lty=2)+
+  #geom_abline(slope = 1,intercept=0,col="black",lty=2) +
+  geom_point(data=noq1_core[noq1_core$glyco=="glyco_mut"],aes(col=as.factor(pos)),size=2) +
+  ggrepel::geom_text_repel(data=noq1_core[noq1_core$new=="C" & noq1_core$glyco=="glyco_mut"],aes(label=mutation),min.segment.length = 0)+
+  scale_color_manual(values=rev(c("#000060","#4B52C8","#96A5DF","#C9F1FF")), name="Position")
+
+q <- ggscatter(noq1_core[noq1_core$cat =="missense"],y="trans_av",x="trans_av_e1", add="reg.line",font.family = "Myriad Pro", xlab="Trafficking Score (-KCNQ1)",ylab="Function Score",col="lightgrey",alpha=0.7)+
+  #scale_colour_steps(n.breaks=6,low = "pink",high = "red")+
+  stat_cor()+
+  geom_hline(yintercept = c(co3,co4), lty=2)+
+  geom_vline(xintercept = c(to3_e1,to4_e1),lty=2)+
+  #geom_abline(slope = 1,intercept=0,col="black",lty=2) +
+  geom_point(data=noq1_core[noq1_core$glyco=="glyco_mut"],aes(col=as.factor(pos)),size=2) +
+  ggrepel::geom_text_repel(data=noq1_core[noq1_core$new=="C" & noq1_core$glyco=="glyco_mut"],aes(label=mutation),min.segment.length = 0)+
+  scale_color_manual(values=rev(c("#000060","#4B52C8","#96A5DF","#C9F1FF")), name="Position")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"glyco_funcVtraf.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"glyco_funcVtraf-Q1.pdf",sep="")
+ggsave(q, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+```{r}
+p <- ggscatter(core2[core2$cat=="synon"], y="trans_av",x="trans_av_traf", col = "#006600",
+          add = "none", conf.int = FALSE, fullrange = TRUE,
+          #cor.coef = TRUE, cor.method = "spearman",
+          ylab = "Functional scores", xlab = "Trafficking scores", 
+          family ="Myriad Pro")+
+  #stat_cor(method = "spearman",family ="Myriad Pro",label.x=1.55, hjust=1)+
+  theme(text = element_text(family="Myriad Pro"))+
+  geom_hline(yintercept = c(co1,co2),lty=2)+geom_vline(xintercept = c(to1,to2), lty=2) + geom_point(data=core2[core2$cat=="latens" | core2$cat=="earlyns"], aes(y=trans_av,x=trans_av_traf, color=tail))+
+  ylab("Functional Score")+
+  xlab("Trafficking Score") +
+  scale_color_manual(name="Non-sense position", values=c("#660000", "#DD4444","#FF9999"),labels=c("1-55","56-104",expression("">="105")))+
+  theme(legend.position = "top", text = element_text(family="Myriad Pro"),legend.text= element_text(size=15),legend.spacing.x = unit(0.1, 'cm'))+geom_hline(yintercept = c(co1,co2), lty=2)+geom_vline(xintercept = c(to1,to2), lty=2)+ 
+  annotate( "text", label = "WT-like", y = 1.55, hjust=0.5, x = 1, size = 5, family="Myriad Pro")+
+  annotate( "text", label = "Trafficking Defect",y = -0.25, hjust=0.5, x = 0.25, size = 5, family="Myriad Pro")+
+  annotate( "text", label = "Gating Defect",  y = -0.25, hjust=0.5, x = 1.5, size = 5, family="Myriad Pro")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"nonsenseSynon_correlation.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+#### correlation plot for synon
+q <- ggscatter(core2[core2$cat=="synon"], y="trans_av",x="trans_av_traf", col = "#006600",
+          add = "reg.line", conf.int = FALSE, fullrange = TRUE,
+          #cor.coef = TRUE, cor.method = "spearman",
+          ylab = "Functional scores", xlab = "Trafficking scores", 
+          family ="Myriad Pro")+
+  stat_cor(method = "spearman",family ="Myriad Pro",label.x=1.55, hjust=1)+
+  theme(text = element_text(family="Myriad Pro"))+
+  geom_hline(yintercept = c(co1,co2),lty=2)+geom_vline(xintercept = c(to1,to2), lty=2)+
+  #annotate("text",label =expression("Mean" %+-% "3SD"), x=1.25,y=0.80,hjust=0)+
+  xlim(min(core2$trans_av_traf, na.rm=T),max(core2$trans_av_traf, na.rm = T))+
+  ylim(min(core2$trans_av, na.rm=T),max(core2$trans_av, na.rm = T))
+
+q
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"synon_correlation.pdf",sep="")
+ggsave(q, filename = pdfName, height= 4, width = 6,device = cairo_pdf, units = "in")
+  
+  #geom_text(data=subset(core2, (cat =="synon"  & trans_av_traf > 1.15) | (cat =="synon"  & trans_av_traf < 0.82)),aes(label=mutation),nudge_x = -0.015, hjust=1,family="Myriad Pro")+
+```
+
+
+```{r}
+### correlation plots for all synon, and early and late nonsense 
+ggscatter(core2[core2$cat!="missense"], x="trans_av",y="trans_av_traf", col="cat",
+          add = "reg.line", conf.int = FALSE, fullrange = TRUE,
+          #cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Functional scores", ylab = "Trafficking scores", facet.by = "cat",
+          ) +stat_cor(aes(color=cat),hjust=0,method = "spearman",family ="Myriad Pro") + geom_text(data=subset(core2, (cat =="synon"  & trans_av_traf > 1.15) | (cat =="synon"  & trans_av_traf < 0.82)),aes(label=mutation),nudge_x = -0.02, hjust=1,family="Myriad Pro") + scale_color_manual(name=NULL,values=c("#660000", "#DD4444", "#006600"),labels=c("Early nonsense", "Late nonsense","Synonymous"))+
+  theme(legend.position = "top",text=element_text(family="Myriad Pro"))
+
+to1 = mean(synon$trans_av_traf)-3*sd(synon$trans_av_traf)
+to2 = mean(synon$trans_av_traf)+3*sd(synon$trans_av_traf)
+#### correlation plot for missense 
+
+core2$func = ifelse(core2$trans_av < co3 & core2$trans_av_traf<to3, "Trafficking Defect\nLoss Of Function", 
+                    ifelse(core2$trans_av < co3 & core2$trans_av_traf>to3,"Gating Defect", 
+                           ifelse(core2$trans_av > co3 & core2$trans_av_traf<to3,"Trafficking Defect\nWT-like function",
+                                  ifelse(core2$trans_av > co3 & core2$trans_av_traf>to4,"Trafficking Increase","WT-like")
+                           )))
+
+my_pal <- colorRampPalette(c("#093047","#56b4e9","#d5ecf9"))(n=5)
+
+r <- ggscatter(core2[core2$cat=="missense"], y="trans_av",x="trans_av_traf", col="func", fill="black",
+          #add = "reg.line", 
+          conf.int = FALSE, fullrange = TRUE,size=0.5,
+          #cor.coef = TRUE, cor.method = "spearman",
+          ylab = "Functional scores", xlab = "Trafficking scores")+
+  geom_hline(yintercept = c(co3,co4), lty=2)+
+  geom_vline(xintercept = c(to3,to4),lty=2)+
+  #annotate("text",label =expression("Mean" %+-% "3SD"), x=1.25,y=0.80,hjust=0)+
+  scale_color_manual(values=my_pal,name=NULL,na.translate = F)+
+  theme(text=element_text(family="Myriad Pro"))
+#+
+ #  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+
+r
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"missense_correlation.pdf",sep="")
+ggsave(r, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+# +
+#   annotate( "text", label = "WT-like", x = 1, hjust=0.5, y = 1, size = 5, family="Myriad Pro")+
+#   annotate( "text", label = "Trafficking Defect", x = 0.65*to1, hjust=1, y = -0.2, size = 5, family="Myriad Pro")+
+#   annotate( "text", label = "Gating Defect",  x = 1.5, hjust=0.5, y = -0.2, size = 5, family="Myriad Pro")+
+#   annotate( "text", label = "trafficking deficient but functional?", x = 0.25, hjust=0.5, y = 1.65, size = 5, family="Myriad Pro")+
+#   annotate( "text", label = "Trafficking increase", x = 1.75, hjust=0.5, y = 1.65, size = 5, family="Myriad Pro")
+
+```
+
+```{r}
+# Conservation scores 
+# need to create a copy of dbNSFP_KCNE1_scores.csv where . for missing is replaced by NA 
+# run this in bash sed 's/\.,/NA,/g' dbNSFP_KCNE1_scores.csv > dbNSFP_KCNE1_scores_clean.csv
+cons <- fread("~/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/dbNSFP_KCNE1_scores_clean.csv", header=T, stringsAsFactors = F) %>% dplyr::rename("pos"="aapos","orig"="aaref","new"="aaalt")
+head(cons)
+cons$mutation = paste(cons$orig, cons$pos, cons$new, sep="")
+head(core2)
+
+cons2 = colnames(cons)
+
+cons_core <- inner_join(cons,core2)
+
+x_cons <- melt(cons_core[,c(2,25,5:19,21:24,30,38)],id=c("orig","pos","new","mutation","trans_av","trans_av_traf")) %>%
+  separate(.,variable,into=c("variable",NA),sep="_")
+
+# skipping column 20 MPC_score because it is NA for ALL of them 
+
+# try a corr plot 
+y_cons = cons_core[,c(7:19,21:24,30,38)]
+testRes = cor.mtest(y_cons, conf.level = 0.95)
+cor_plot = cor(y_cons,use="pairwise.complete.obs")
+corrplot(cor_plot,na.label="", outline=F, p.mat = testRes$p, diag = F,
+         pch.cex = 0.9, type="lower",sig.level = c(0.0001, 0.001, 0.01), #0.05/32
+         insig = 'label_sig', pch.col = 'grey20') # corrected for multiple testing 
+```
+
+
+```{r}
+# FUNCTIONAL SCORES
+p <- ggscatter(x_cons,x="trans_av",y="value",add="reg.line",alpha=0.7,col="grey",add.params = list(color = "darkblue",linetype=2))+facet_wrap(~variable,scales="free_y")+theme(legend.position = 'none',text = element_text(family="Myriad Pro"))+stat_cor(method="spearman",col="black",label.sep = "\n", cor.coef.name="rho")+xlab("Functional Score")+
+  ylab("Computational Score")
+
+p
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"funcVcons_correlation.pdf",sep="")
+ggsave(p, filename = pdfName, height= 8, width = 12,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+# TRAFFICKING SCORES 
+x_cons$abs_traf = abs(1-x_cons$trans_av_traf)
+
+p <- ggscatter(x_cons,x="abs_traf",y="value",add="reg.line",alpha=0.7,col="grey",add.params = list(color = "darkblue",linetype=2),family="MyriadPro")+facet_wrap(~variable,scales="free_y")+theme(legend.position = 'none', text = element_text(family="Myriad Pro"))+stat_cor(method="spearman",col="black",label.sep = "\n", cor.coef.name="rho",family="Myriad Pro")+xlab("|1 - Trafficking Score|")+
+  ylab("Computational Scores")
+
+p
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"trafVcons_correlation.pdf",sep="")
+ggsave(p, filename = pdfName, height= 8, width = 12,device = cairo_pdf, units = "in")
+```
+
+```{r}
+gnomad <- fread("~/Downloads/gnomAD_v2.1.1_ENSG00000180509_2022_10_11_08_33_16.csv", header=T, stringsAsFactors = F) %>% dplyr::select("Position", "rsIDs", "Reference", "Alternate", "Source", "Protein Consequence","Allele Count", "Transcript Consequence","VEP Annotation",
+"ClinVar Clinical Significance","ClinVar Variation ID","Allele Count","Allele Number","Allele Frequency","Homozygote Count","Hemizygote Count") %>% dplyr::filter(.,`Protein Consequence` != "") %>% dplyr::mutate(`Protein` = str_sub(`Protein Consequence`, 3, -1)) 
+
+gnomad <- gnomad %>% mutate(mutation =  str_replace_all(gnomad$Protein, c(
+              "Ala"="A", "Arg"="R", "Asn"="N", "Asp"="D",
+              "Cys"="C", "Glu"="E", "Gln"="Q", "Gly"="G",
+              "His"="H", "Ile"="I", "Leu"="L", "Lys"="K",
+              "Met"="M", "Phe"="F", "Pro"="P", "Ser"="S",
+              "Thr"="T", "Trp"="W", "Tyr"="Y", "Val"="V", "Ter"="X"
+              ) ) ) %>% separate(mutation,into= c("orig","pos","new"),sep=c(1,-1),convert = T)
+
+head(gnomad)
+
+gnomad$mutation = ifelse(gnomad$pos ==38, paste(gnomad$new,gnomad$pos,gnomad$orig,sep=""),paste(gnomad$orig,gnomad$pos,gnomad$new,sep=""))
+gnomad_core <- left_join(gnomad,core2,by="mutation")
+
+
+p <- ggplot(gnomad_core,aes(`Allele Frequency`,trans_av))+
+    geom_point(aes(size=`Allele Count`))+theme_classic()+geom_hline(yintercept = c(0,1), lty=2,color=c("red","blue"))+
+       scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  geom_text(data=subset(gnomad_core, mutation =="G38S"),aes(label=mutation),nudge_y = -0.06, hjust=0.5,family="Myriad Pro")+annotation_logticks(sides="b") +
+  xlab("gnomAD Allele Frequency")+ylab("Functional Score")+
+  annotate("text",label="WT-like",x=0.4,y=0.95, size=5,family="Myriad Pro")+
+  theme(legend.position = "none",text=element_text(family="Myriad Pro"))+
+  ylim(0,1.35)
+
+
+q <- ggplot(gnomad_core,aes(`Allele Frequency`, trans_av_traf))+
+    geom_point(aes(size=`Allele Count`))+theme_classic()+geom_hline(yintercept = c(0,1,2), lty=2,color=c("red","blue","red"))+
+  scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  geom_text(data=subset(gnomad_core, mutation =="G38S"),aes(label=mutation),nudge_y = -0.09, hjust=0.5,family="Myriad Pro")+annotation_logticks(sides="b") + 
+  annotate("text",label="WT-like",x=0.4,y=0.92, size=5,family="Myriad Pro")+
+  xlab("gnomAD Allele Frequency")+
+  ylab("Trafficking Score")+
+  ylim(0,2)+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "none")
+
+
+# nas <- unlist(gnomad_core[is.na(gnomad_core$trans_av),mutation])
+
+
+combined <- q+p
+
+combined
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_AFvScore_traf.pdf",sep="")
+ggsave(combined+ plot_annotation(tag_levels = 'A'), filename = pdfName, height= 5, width = 10,device = cairo_pdf, units = "in")
+combined + plot_annotation(tag_levels = 'A')
+
+
+q <- ggplot(gnomad_core,aes(`Allele Frequency`, traf_abs))+
+    geom_point(aes(size=`Allele Count`))+theme_classic()+geom_hline(yintercept = c(0,1), lty=2,color=rev(c("red","blue")))+
+  scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  geom_text(data=subset(gnomad_core, mutation =="G38S"),aes(label=mutation),nudge_y = 0.07, hjust=0.5,family="Myriad Pro")+annotation_logticks(sides="b") + 
+  annotate("text",label="WT-like",x=0.4,y=0.035, size=5,family="Myriad Pro")+
+  xlab("gnomAD Allele Frequency")+
+  ylab("|1-Trafficking Score|")+
+  ylim(0,1.35)+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "none")
+
+combined <- q+p
+
+combined
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_AFvScore.pdf",sep="")
+ggsave(combined+ plot_annotation(tag_levels = 'A'), filename = pdfName, height= 5, width = 10,device = cairo_pdf, units = "in")
+```
+
+```{r}
+# boot strapping to show the difference between two distributions 
+core2_gnomad <- left_join(core2,gnomad,by="mutation")
+x <- core2_gnomad[which(is.na(core2_gnomad$`Allele Frequency`) & core2_gnomad$cat=="missense"),]
+
+a <- core2_gnomad[which(!is.na(core2_gnomad$`Allele Frequency`) & core2_gnomad$cat=="missense"),]
+
+# x1 <- sample_n(x,113) %>% dplyr::select(trans_av) %>% dplyr::mutate("sample"=0)
+x1 <- sample_n(x,50) %>% dplyr::select(trans_av) %>% dplyr::mutate("sample"=0)
+a1 <- sample_n(a,50) %>% dplyr::select(trans_av) %>% dplyr::mutate("sample"=0)
+
+for (i in 1:100){
+   x2 <- sample_n(x,50) %>% select(trans_av) %>% mutate("sample"=i)
+   x1 <- rbind(x1,x2)
+}
+
+for (i in 1:100){
+   a2 <- sample_n(a,50) %>% select(trans_av) %>% mutate("sample"=i)
+   a1 <- rbind(a1,a2)
+}
+
+mean_dens_x <- data.frame(x_cor = density(unlist(x1[x1$sample == 1,"trans_av"]), from= -0.138,to=1.536, n=2048)$x,
+                        y_cor = density(unlist(x1[x1$sample == 1,"trans_av"]), from= -0.138,to=1.536, n=2048)$y)
+# to calculate mean and CI of the density plot: 
+for (i in 2:100){
+  x_cor = density(unlist(x1[x1$sample == i,"trans_av"]),na.rm=T, from= -0.138,to=1.536, n=2048)$x
+  y_cor = density(unlist(x1[x1$sample == i,"trans_av"]),na.rm=T, from= -0.138,to=1.536, n=2048)$y
+  inter_cor <- cbind(x_cor,y_cor)
+  mean_dens_x <- full_join(mean_dens_x,as.data.frame(inter_cor), by="x_cor")
+}
+
+mean_dens_a <- data.frame(x_cor = density(unlist(a1[a1$sample == 1,"trans_av"]), from= -0.138,to=1.536, n=2048, na.rm=T)$x,
+                        y_cor = density(unlist(a1[a1$sample == 1,"trans_av"]), from= -0.138,to=1.536, n=2048, na.rm=T)$y)
+# to calculate mean and CI of the density plot: 
+for (i in 2:100){
+  x_cor = density(unlist(a1[a1$sample == i,"trans_av"]),na.rm=T, from= -0.138,to=1.536, n=2048)$x
+  y_cor = density(unlist(a1[a1$sample == i,"trans_av"]),na.rm=T, from= -0.138,to=1.536, n=2048)$y
+  inter_cor <- cbind(x_cor,y_cor)
+  mean_dens_a <- full_join(mean_dens_a,as.data.frame(inter_cor), by="x_cor")
+}
+
+mean_dens_x$mean_dens = rowMeans(mean_dens_x[,2:101])
+mean_dens_a$mean_dens = rowMeans(mean_dens_a[,2:101])
+
+mean_dens_x$upper = mean_dens_x$mean_dens + 1.96*(apply(mean_dens_x[,2:101],1,sd, na.rm=T))/10
+mean_dens_x$lower = mean_dens_x$mean_dens - 1.96*(apply(mean_dens_x[,2:101],1,sd, na.rm=T))/10
+
+
+mean_dens_a$upper = mean_dens_a$mean_dens + 1.96*(apply(mean_dens_a[,2:101],1,sd, na.rm=T))/10
+mean_dens_a$lower = mean_dens_a$mean_dens - 1.96*(apply(mean_dens_a[,2:101],1,sd, na.rm=T))/10
+
+p.1 <- ggplot(mean_dens_x,aes(x_cor,mean_dens))+geom_line(col="lightgrey")+
+  #geom_line(data=mean_dens_x,aes(x_cor,upper),col="lightgrey", lty=2)+
+  theme_classic()+
+  #geom_line(data=mean_dens_x,aes(x_cor,lower),col="lightgrey", lty=2)+
+  geom_ribbon(aes(ymin=upper, ymax=lower),alpha=0.3)+
+  geom_line(data=mean_dens_a,aes(x_cor,mean_dens), col="black")+
+  geom_ribbon(data=mean_dens_a,aes(ymin=upper, ymax=lower),fill="black",alpha=0.7)+
+  xlab("Functional Score")+
+  ylab("Probability Density")+
+  theme(text=element_text(family="Myriad Pro"))+
+  geom_vline(xintercept=c(co3,co4),lty=2)
+  
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_nonGno_Func_v2.pdf",sep="")
+ggsave(p.1, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+d1 <- unlist(mean_dens_x$mean_dens)
+d2 <- unlist(mean_dens_a$mean_dens)
+wilcox.test(d2,d1)
+
+p <- ggplot(x1, aes(trans_av, col=as.factor(sample)))+
+  geom_density()+
+  theme_classic()+
+  scale_color_manual(values=myp)+
+  theme(legend.position = "none",text=element_text(family="Myriad Pro"))+
+  geom_density(data=gnomad_core[gnomad_core$cat=="missense",],aes(trans_av), col="black")+xlab("Functional Score")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_nonGno_Func.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+
+# now for trafficking
+x1 <- sample_n(x,113) %>% select(trans_av_traf) %>% mutate("sample"=0)
+
+
+for (i in 1:100){
+   x2 <- sample_n(x,113) %>% select(trans_av_traf) %>% mutate("sample"=i)
+   x1 <- rbind(x1,x2)
+}
+
+myp <- colorRampPalette(c("lightgrey","lightgrey"))(n=101)
+p <- ggplot(x1, aes(trans_av_traf, col=as.factor(sample)))+
+  geom_density()+
+  theme_classic()+
+  scale_color_manual(values=myp)+
+  theme(legend.position = "none",text=element_text(family="Myriad Pro"))+
+  geom_density(data=gnomad_core[gnomad_core$cat=="missense",],aes(trans_av_traf), col="black")+xlab("Trafficking Score (+KCNQ1)")
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_nonGno_Traf.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+
+# version 2 figures
+x1 <- sample_n(x,50) %>% dplyr::select(trans_av_traf) %>% dplyr::mutate("sample"=0)
+a1 <- sample_n(a,50) %>% dplyr::select(trans_av_traf) %>% dplyr::mutate("sample"=0)
+
+for (i in 1:100){
+   x2 <- sample_n(x,50) %>% select(trans_av_traf) %>% mutate("sample"=i)
+   x1 <- rbind(x1,x2)
+}
+
+for (i in 1:100){
+   a2 <- sample_n(a,50) %>% select(trans_av_traf) %>% mutate("sample"=i)
+   a1 <- rbind(a1,a2)
+}
+
+mean_dens_x <- data.frame(x_cor = density(unlist(x1[x1$sample == 1,"trans_av_traf"]), from= -0.088,to=2.119, n=2048)$x,
+                        y_cor = density(unlist(x1[x1$sample == 1,"trans_av_traf"]), from= -0.088,to=2.119, n=2048)$y)
+# to calculate mean and CI of the density plot: 
+for (i in 2:100){
+  x_cor = density(unlist(x1[x1$sample == i,"trans_av_traf"]),na.rm=T, from= -0.088,to=2.119, n=2048)$x
+  y_cor = density(unlist(x1[x1$sample == i,"trans_av_traf"]),na.rm=T, from= -0.088,to=2.119, n=2048)$y
+  inter_cor <- cbind(x_cor,y_cor)
+  mean_dens_x <- full_join(mean_dens_x,as.data.frame(inter_cor), by="x_cor")
+}
+
+mean_dens_a <- data.frame(x_cor = density(unlist(a1[a1$sample == 1,"trans_av_traf"]), from= -0.088,to=2.119, n=2048)$x,
+                        y_cor = density(unlist(a1[a1$sample == 1,"trans_av_traf"]), from= -0.088,to=2.119, n=2048)$y)
+# to calculate mean and CI of the density plot: 
+for (i in 2:100){
+  x_cor = density(unlist(a1[a1$sample == i,"trans_av_traf"]),na.rm=T, from= -0.088,to=2.119, n=2048)$x
+  y_cor = density(unlist(a1[a1$sample == i,"trans_av_traf"]),na.rm=T, from= -0.088,to=2.119, n=2048)$y
+  inter_cor <- cbind(x_cor,y_cor)
+  mean_dens_a <- full_join(mean_dens_a,as.data.frame(inter_cor), by="x_cor")
+}
+
+mean_dens_x$mean_dens = rowMeans(mean_dens_x[,2:101], na.rm=T)
+mean_dens_a$mean_dens = rowMeans(mean_dens_a[,2:101], na.rm=T)
+
+mean_dens_x$upper = mean_dens_x$mean_dens + 1.96*(apply(mean_dens_x[,2:101],1,sd, na.rm=T))/10
+mean_dens_x$lower = mean_dens_x$mean_dens - 1.96*(apply(mean_dens_x[,2:101],1,sd, na.rm=T))/10
+
+
+mean_dens_a$upper = mean_dens_a$mean_dens + 1.96*(apply(mean_dens_a[,2:101],1,sd, na.rm=T))/10
+mean_dens_a$lower = mean_dens_a$mean_dens - 1.96*(apply(mean_dens_a[,2:101],1,sd, na.rm=T))/10
+
+p.1 <- ggplot(mean_dens_x,aes(x_cor,mean_dens))+geom_line(col="lightgrey")+
+  #geom_line(data=mean_dens_x,aes(x_cor,upper),col="lightgrey", lty=2)+
+  theme_classic()+
+  #geom_line(data=mean_dens_x,aes(x_cor,lower),col="lightgrey", lty=2)+
+  geom_ribbon(aes(ymin=lower, ymax=upper),alpha=0.3)+
+  geom_line(data=mean_dens_a,aes(x_cor,mean_dens), col="black")+
+  geom_ribbon(data=mean_dens_a,aes(ymin=lower, ymax=upper),fill="black",alpha=0.7)+
+  xlab("Trafficking Score")+
+  ylab("Probability Density")+
+  theme(text=element_text(family="Myriad Pro"))+
+  geom_vline(xintercept = c(to3,to4), lty=2)
+  
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"gnomad_nonGno_Traf_v2.pdf",sep="")
+ggsave(p.1, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+d1 <- unlist(mean_dens_x$mean_dens)
+d2 <- unlist(mean_dens_a$mean_dens)
+wilcox.test(d2,d1)
+
+```
+
+
+```{r}
+manual <- data.frame("mutation"=c("WT","I61X","G25V","G60D","D76N","G55X","F57Y","R98W","D85N","F53X",
+                                "L3P","E19D","D39G","E101V","T125M","P127T"),
+                    "I-20"=c(15.89,0,34.78,28.49,0.18,0.18,2.54,4.73,32.3,10.03,
+                            4.8,6.69,43.9,9.08,2.99,4.8),
+                    "I0"=c(48.56,0.03,87.4,71.5,3.19,0.19,14.86,15.26,117.22,41.94,
+                          30.3,25.07,112.5,22.39,9.36,13.1),
+                    "I20"=c(92.1,0.01,156.1,114.9,10.1,0.20,48.78,31.72,215.59,91.23,
+                           79.9,52.15,185.1,33.38,20.43,22.7),
+                    "cell"=c(rep("HEK",8),rep("CHO",3),rep("HEK",4),"CHO"))
+
+
+act <- data.frame("mutation"=c("WT","G25V","G60D","D76N","F57Y","R98W","D85N","F53X","L3P","E19D","D39G","E101V","T125M"),
+                  "v1/2act"=c(19.6,1.3,17.7,5.7,17.7,6.8,-0.49,21.1,22.2,4.9,-8.3,6.4,7.5))
+  
+manual2 <- left_join(manual,act)
+
+
+manual_core <-left_join(manual,core2)
+
+x_manual <- melt(manual_core[,c("mutation","I.20","I0","I20","trans_av","trans_av_traf","traf_abs")], id=c("mutation","trans_av","traf_abs","trans_av_traf") )
+
+# FIGURE OUT LABELS 
+ current_names = c("I.20"="-20mV",
+                   "I0"="0mV",
+                   "I20"="20mV")
+
+p <- ggscatter(x_manual, x="trans_av", y="value", add="reg.line",conf.int = TRUE)+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  facet_wrap(~variable, scales="free_y", labeller = as_labeller(current_names))+
+  xlab("Functional Score")+
+  ylab("Normalized Current")+
+  ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))
+  
+  
+  #geom_text(data=x_manual,aes(label=mutation), nudge_x = 0.05, hjust=0,family="Myriad Pro")
+
+q <- ggscatter(x_manual, x="traf_abs", y="value", add="reg.line",conf.int = TRUE)+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  facet_wrap(~variable, scales="free_y", labeller = as_labeller(current_names))+
+  xlab("|1 - Trafficking Score|")+
+  ylab("Normalized Current")+
+  ggrepel::geom_text_repel(aes(label=mutation),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))
+
+combined <- p/q
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"ManualvScore.pdf",sep="")
+ggsave(combined+ plot_annotation(tag_levels = 'A'), filename = pdfName, height= 5, width = 10,device = cairo_pdf, units = "in")
+combined + plot_annotation(tag_levels = 'A')
+
+# this is to see if I could do both functional and trafficking on the same, but it doesn't look great
+manual_core_melt <- melt(manual_core[,c("mutation","I.20","trans_av","trans_av_traf")],id=c("mutation","I.20"))
+
+ggscatter(manual_core_melt, x="value", y="I.20",shape="variable", add="reg.line",conf.int = TRUE)+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  xlab("Score")+
+  ylab("Normalized Current at -20mV")+
+  ggrepel::geom_text_repel(aes(label=mutation,col=variable),family="Myriad Pro")+
+  theme(text=element_text(family="Myriad Pro"))+
+  scale_color_manual(values=c("black","red"),labels=c("Functional Score","Trafficking Score"))+
+  scale_fill_manual(values=c("black","red"),labels=c("Functional Score","Trafficking Score"))
+######
+
+
+r <- ggscatter(manual_core, x="trans_av", y="I.20", add="reg.line",conf.int = TRUE)+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  xlab("Functional Score")+
+  ylab("Normalized Current at -20mV")+
+  ggrepel::geom_text_repel(aes(label=mutation,),family="Myriad Pro",)+
+  theme(text=element_text(family="Myriad Pro"))
+
+r2 <- ggscatter(manual_core, x="trans_av_traf", y="I.20", add="reg.line",conf.int = TRUE)+
+  stat_cor(method="spearman", family="Myriad Pro",label.sep = "\n",cor.coef.name="rho")+
+  xlab("Trafficking Score")+
+  ylab("Normalized Current at -20mV")+
+  ggrepel::geom_text_repel(aes(label=mutation,),family="Myriad Pro",)+
+  theme(text=element_text(family="Myriad Pro"))
+
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"ManualvFuncScoreI-20.pdf",sep="")
+ggsave(r+r2, filename = pdfName, height= 4, width = 8,device = cairo_pdf, units = "in")
+
+```
+
+```{r}
+noq1 <- fread("../KCNE1_only_end_file_post_QC.txt", header=T, stringsAsFactors = F) %>% dplyr::select(mutation,mutationType, orig,pos,new, trans_av, sd_av, sem) %>% 
+  dplyr::rename("trans_av_e1"="trans_av", "sd_av_e1"="sd_av","sem_e1"="sem")
+
+noq1_core <- full_join(noq1,core2)
+# trans_score is the score)
+
+noq1_core$category = ifelse(!is.na(noq1_core$mutationType),noq1_core$mutationType,ifelse(!is.na(noq1_core$cat_traf),noq1_core$cat_traf,noq1_core$cat ))
+
+fileName = paste(Sys.Date(),"supplementalTable4.txt",sep="-")
+
+fwrite(noq1_core[,c("mutation","category","orig","pos","new",
+                     "trans_av","sd_av","sem","trans_av_traf","sd_av_traf","count","sem_traf","trans_av_e1","sd_av_e1","sem_e1" )],
+       fileName,row.names = F, quote = F, sep="\t")
+syno2 <- noq1_core[noq1_core$cat =="synon"]
+to1_e1 = mean(syno2$trans_av_e1)-3*sd(syno2$trans_av_e1)
+to2_e1 = mean(syno2$trans_av_e1)+3*sd(syno2$trans_av_e1)
+
+to3_e1 = mean(syno2$trans_av_e1)-1.96*sd(syno2$trans_av_e1)
+to4_e1 = mean(syno2$trans_av_e1)+1.96*sd(syno2$trans_av_e1)
+
+glyco = c(5,7,26,28)
+glyco1 = c(5,26)
+glyco2 = c(7,28)
+glyco_mut = c("S","T")
+
+ noq1_core$glyco = ifelse(noq1_core$pos %in% glyco1 & noq1_core$orig != noq1_core$new & noq1_core$new !=  "X", "glyco_mut",
+                          ifelse(noq1_core$pos %in% glyco2 & noq1_core$new %ni% glyco_mut & noq1_core$new !=  "X", "glyco_mut","no_glyco"))
+
+my_palette <- colorRampPalette(c("#a9120a","lightpink"))(n=40)
+
+p <- ggscatter(noq1_core[noq1_core$cat =="missense"],x="trans_av_traf",y="trans_av_e1", add="reg.line",font.family = "Myriad Pro", xlab="Trafficking Score (+KCNQ1)",ylab="Trafficking Score (-KCNQ1)",col="lightgrey",alpha=0.7)+
+  #scale_colour_steps(n.breaks=6,low = "pink",high = "red")+
+  stat_cor()+
+  geom_vline(xintercept = c(to3,to4), lty=2)+
+  geom_hline(yintercept = c(to3_e1,to4_e1),lty=2)+
+  #geom_abline(slope = 1,intercept=0,col="black",lty=2) +
+  geom_point(data=noq1_core[noq1_core$glyco=="glyco_mut"],aes(col=as.factor(pos)),size=2) +
+  ggrepel::geom_text_repel(data=noq1_core[noq1_core$new=="C" & noq1_core$glyco=="glyco_mut"],aes(label=mutation),min.segment.length = 0)+
+  scale_color_manual(values=rev(c("#000060","#4B52C8","#96A5DF","#C9F1FF")), name="Position")
+
+
+q <- ggscatter(noq1_core[noq1_core$cat =="missense"],x="trans_av_traf",y="trans_av_e1", add="reg.line",font.family = "Myriad Pro", xlab="Trafficking Score (+KCNQ1)",ylab="Trafficking Score (-KCNQ1)",col="black",alpha=0.7)+
+  stat_cor()
+
+combined <- q+p +plot_annotation(tag_levels = 'A')
+
+combined
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"traffick_q1w+wout.pdf",sep="")
+ggsave(combined, filename = pdfName, height= 4, width = 8,device = cairo_pdf, units = "in")
+
+```
+```{r}
+ggplot(noq1_core,aes(trans_av,fill=cat))+geom_histogram(bins = 50)+theme_bw()+scale_fill_manual(labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"),values=c("#660000", "#DD4444", "#56B4E9","#006600"))
+```
+
+
+#### distribution plots with histograms 
+# functional data 
+```{r}
+# density plots --> disagree with density plots, looking to do violin plots instead
+# cat_traf comes from q1+e1 trafficking 
+# mutationType comes from e1 only trafficking only 
+# cat comes from functional 
+
+# here are the unique names for each of these (bugger)
+
+# unique(cat)
+# [1] "synon"    "missense" "latens"   "earlyns"  NA        
+# > unique(cat_traf)
+# [1] "synonymous" "missense"   "lateNS"     "earlyNS"    NA          
+# > unique(mutationType)
+# [1] "synon"          "missense"       "late_nonsense"  "early_nonsense" NA
+
+
+# noq1_core$cat = factor(noq1_core$cat, levels = c("missense","latens","earlyns","synon"))
+
+noq1_core$tail_func_cat = ifelse(noq1_core$cat %ni% c("latens","earlyns"), noq1_core$cat,
+                                 ifelse(noq1_core$pos<56, "early_nonsense", ifelse(noq1_core$pos<105,"late_nonsense","tail_nonsense"))
+                                 )
+
+noq1_core$tail_func_cat = factor(noq1_core$tail_func_cat, levels = c("missense","early_nonsense","late_nonsense","tail_nonsense","synon"))
+
+line_data = data.frame(xintercept = c(co1, co2, 
+                                      tapply(noq1_core$trans_av, noq1_core$cat =="synon", mean, na.rm=T)[2] + 1.96* tapply(noq1_core$trans_av, noq1_core$cat =="synon", sd, na.rm=T)[2],
+                                      tapply(noq1_core$trans_av, noq1_core$cat =="synon", mean, na.rm=T)[2] - 1.96* tapply(noq1_core$trans_av, noq1_core$cat =="synon", sd, na.rm=T)[2]),
+                       linecolor=c("3SD","3SD","1.96SD","1.96SD")
+                       )
+# values=c("#660000", "#DD4444","#FF9999")
+# for the functional scores 
+p <- ggplot(noq1_core,aes(trans_av,fill=tail_func_cat))+geom_histogram(bins = 50)+
+  theme_classic()+
+  scale_fill_manual(labels=c("Missense","Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#56B4E9","#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  #geom_vline(xintercept=c(co1,co2), lty=2, lwd=0.5,color="3SD")+
+  #geom_vline(xintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] + 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2, lwd=0.5, col="red")+
+  #geom_vline(xintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] - 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2,lwd=0.5,col="red")+
+  labs(y=NULL, x="Functional Score", title=NULL)+
+  theme(legend.position="top",text=element_text(family="Myriad Pro"))+
+  geom_vline(aes(xintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_color_manual(values=c("red","black"))+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+p
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"functional_dist.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+
+# not saving this below because this is a violin plot and we have decided to go with histograns 
+p <- ggplot(noq1_core[!is.na(noq1_core$cat)],aes(cat,trans_av))
+
+q <- p + 
+  geom_violin(aes(fill=cat),scale="count",alpha=0.65)+
+  theme_classic2()+
+  geom_boxplot(width=0.05,outlier.shape = NA) +
+  #geom_dotplot(binaxis = "y", stackdir = "center",binwidth = 0.01) + 
+  scale_fill_manual(labels=c("Early nonsense", "Late nonsense", "Missense","Synonymous"),values=c("#660000", "#DD4444", "#56B4E9","#006600"),name=NULL)+
+  geom_hline(yintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] + 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2, lwd=0.5) +
+    geom_hline(yintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] - 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2,lwd=0.5) + 
+    labs(x=NULL, y="Average Normalized Score", title=NULL) + 
+    theme(text = element_text(hjust = 0.5, family="Myriad Pro"), legend.position = "none") + scale_x_discrete(labels=c("Early nonsense", "Late nonsense", "Missense", "Synonymous"))+coord_flip()
+q
+```
+#trafficking with Q1 data
+```{r}
+noq1_core$tail_traf_cat = ifelse(noq1_core$cat_traf %ni% c("lateNS","earlyNS"), noq1_core$cat_traf,
+                                 ifelse(noq1_core$pos<56, "early_nonsense", ifelse(noq1_core$pos<105,"late_nonsense","tail_nonsense"))
+                                 )
+
+noq1_core$tail_traf_cat = factor(noq1_core$tail_traf_cat, levels = c("missense","early_nonsense","late_nonsense","tail_nonsense","synonymous"))
+
+line_data = data.frame(xintercept = c(to1, to2, 
+                                      tapply(noq1_core$trans_av_traf, noq1_core$cat_traf =="synonymous", mean, na.rm=T)[2] + 1.96* tapply(noq1_core$trans_av_traf, noq1_core$cat_traf =="synonymous", sd, na.rm=T)[2],
+                                      tapply(noq1_core$trans_av_traf, noq1_core$cat_traf =="synonymous", mean, na.rm=T)[2] - 1.96* tapply(noq1_core$trans_av_traf, noq1_core$cat_traf =="synonymous", sd, na.rm=T)[2]),
+                       linecolor=c("3SD","3SD","1.96SD","1.96SD")
+                       )
+# values=c("#660000", "#DD4444","#FF9999")
+# for the functional scores 
+p <- ggplot(noq1_core,aes(trans_av_traf,fill=tail_traf_cat))+geom_histogram(bins = 50)+
+  theme_classic()+
+  scale_fill_manual(labels=c("Missense","Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#56B4E9","#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  #geom_vline(xintercept=c(co1,co2), lty=2, lwd=0.5,color="3SD")+
+  #geom_vline(xintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] + 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2, lwd=0.5, col="red")+
+  #geom_vline(xintercept = tapply(scores$trans_av, scores$cat =="synon", mean, na.rm=T)[2] - 1.96* tapply(scores$trans_av, scores$cat =="synon", sd, na.rm=T)[2], lty=2,lwd=0.5,col="red")+
+  labs(y=NULL, x="Traffikcing Score (+KCNQ1)", title=NULL)+
+  theme(legend.position="top",text=element_text(family="Myriad Pro"))+
+  geom_vline(aes(xintercept=xintercept, color=linecolor),line_data, lty=2)+
+  scale_color_manual(values=c("black","red"))+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+
+p
+
+
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"trafficking_dist.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+
+#### nonsenese versus synonymous 
+# functional 
+```{r}
+
+p <- ggplot(noq1_core[noq1_core$tail_func_cat %in% c("early_nonsense","late_nonsense","tail_nonsense","synon")],aes(pos,trans_av, fill=tail_func_cat, col=tail_func_cat))+
+  geom_point(size=0.5)+
+  geom_line(size=0.5)+
+  theme_classic()+
+  scale_color_manual(labels=c("Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  scale_fill_manual(labels=c("Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  geom_ribbon(aes(ymin=trans_av-sem, ymax=trans_av+sem), alpha=0.3)+
+  labs(x="Position in KCNE1", y="Functional Score")+
+  geom_hline(yintercept = c(co3,co4), lty=2, col="black")+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")
+  
+p 
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"func_NSvSyn.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+  # geom_hline(yintercept=mean(m), col="red", lty=2,)+
+```
+# trafficking 
+```{r}
+p <- ggplot(noq1_core[noq1_core$tail_traf_cat %in% c("early_nonsense","late_nonsense","tail_nonsense","synonymous")],aes(pos,trans_av_traf, fill=tail_traf_cat,col=tail_traf_cat))+geom_point(size=0.5)+geom_line(size=0.5)+
+  theme_classic()+
+  scale_color_manual(labels=c("Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  scale_fill_manual(labels=c("Nonsense 1-55", "Nonsense 56-104", "Nonsense 105-129", "Synonymous"),values=c("#660000", "#DD4444", "#FF9999","#006600"), name=NULL)+
+  geom_ribbon(aes(ymin=trans_av_traf-sem, ymax=trans_av_traf+sem), alpha=0.3)+
+  labs(x="Position in KCNE1", y="Trafficking Score (+KCNQ1)")+
+  geom_hline(yintercept = c(to3,to4), lty=2, col="black")+
+  theme(text=element_text(family="Myriad Pro"), legend.position = "top")
+  
+ p
+pdfName = paste("/Users/ayeshamuhammad/Dropbox/Mac/Documents/MacbookAir2021/Documents/PhD/E1 DMS project/Figures/SuppFigures/",Sys.Date(),"traf_NSvSyn.pdf",sep="")
+ggsave(p, filename = pdfName, height= 4, width = 4,device = cairo_pdf, units = "in")
+```
+
+
+```{r}
+# presumed pathogenic 
+# ultra-rare in gnomad, lit in >1 case OR >=1 case of JLNS
+
+# presumed benign 
+# >100 in gnomad OR >5 in gnomad and in no cases .
+
+# cumulative prevalence in gnomad of LoF variants 
+sum(gnomad_core[gnomad_core$mutation !="G38S" & gnomad_core$trans_av < co1, "Allele Frequency"])
+
+
+ggplot(gnomad_core,aes(`Allele Frequency`,trans_av))+
+    geom_point(aes(size=`Homozygote Count`))+
+  theme_classic()+
+  geom_hline(yintercept = c(0,1), lty=2,color=c("red","blue"))+
+       scale_x_log10(labels = trans_format("log10", math_format(10^.x)))+
+  geom_text(data=subset(gnomad_core, mutation =="G38S"),aes(label=mutation),nudge_y = -0.06, hjust=0.5,family="Myriad Pro")+
+  annotation_logticks(sides="b") +
+  xlab("gnomAD Allele Frequency")+ylab("Functional Score")+annotate("text",label="WT-like",x=0.1,y=0.95, size=5)+theme(legend.position = "none")
+
+### I am not really sure what I was trying to go with this line 
+# +gghighlight(gnomad_core$mutation !="G38S" & gnomad_core$trans_av < co1)+geom_text(label=mutation)
+
+```
+
